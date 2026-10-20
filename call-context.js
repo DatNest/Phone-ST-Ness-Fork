@@ -1,0 +1,139 @@
+import { normalizePhoneSpaces } from './phone-text.js';
+import { getMeta, getThread, getSettings, phoneActivityAllowed, stripThink, resolveContactKey, contactOriginalName, getRpDateTime } from './state.js';
+import { logReq } from './debug-log.js';
+import { publicRoleplayMessage, privateRoleplayText, privateThreadTurns } from './private-context.js';
+
+function clip(value,limit){
+    const text=normalizePhoneSpaces(value).trim();if(text.length<=limit)return text;
+    const marker='\n[… omitted to fit the conversation context …]\n',head=Math.floor((limit-marker.length)*.65);
+    return text.slice(0,head)+marker+text.slice(-(limit-marker.length-head));
+}
+function plain(value){return normalizePhoneSpaces(stripThink(String(value||''))).replace(/<!--[\s\S]*?-->/g,'').replace(/<br\s*\/?>/gi,'\n').replace(/<[^>]+>/g,'').trim();}
+function cardName(card){return String(card?.name||card?.data?.name||'').trim();}
+function characterCards(ctx,key){
+    const list=Array.isArray(ctx.characters)?ctx.characters:[];
+    const active=ctx.characterId!==undefined&&ctx.characterId!==null?list[ctx.characterId]:null;
+    const group=ctx.groupId?(ctx.groups||[]).find(g=>String(g.id)===String(ctx.groupId)):null;
+    const members=group?list.filter(c=>(group.members||[]).includes(c.avatar)):[];
+    // Only cards in this roleplay are relevant; a namesake in another chat is not this contact.
+    const available=[...new Set([active,...members].filter(Boolean))];
+    const recipient=available.find(c=>resolveContactKey(cardName(c))===key);
+    return [...new Set([recipient,active,...(active||recipient?[]:members.slice(0,3))].filter(Boolean))].map(card=>({card,index:list.indexOf(card),recipient:card===recipient}));
+}
+function substitute(ctx,text,name){
+    try{
+        if(ctx.substituteParamsExtended)return String(ctx.substituteParamsExtended(String(text||''),{char:name,user:ctx.name1||'User'}));
+        return String(ctx.substituteParams?ctx.substituteParams(String(text||'')):text||'');
+    }catch{return String(text||'');}
+}
+function fieldsFor(ctx,item){
+    const card=item.card,data=card.data||{};let resolved={};
+    try{resolved=ctx.getCharacterCardFields?.({chid:item.index})||{};}catch{/* Raw V1/V2 fields remain available. */}
+    const group=!!ctx.groupId;
+    const field=(name,raw)=>substitute(ctx,(!group&&resolved[name])||raw,cardName(card));
+    return {
+        name:cardName(card),
+        description:field('description',card.description||data.description),
+        personality:field('personality',card.personality||data.personality),
+        scenario:field('scenario',ctx.chatMetadata?.scenario||card.scenario||data.scenario),
+        examples:field('mesExamples',ctx.chatMetadata?.mes_example||card.mes_example||data.mes_example),
+        notes:field('charDepthPrompt',data.extensions?.depth_prompt?.prompt)
+    };
+}
+function formatCard(fields,recipient){
+    const sections=[['DESCRIPTION',fields.description,12000],['PERSONALITY',fields.personality,3500],['SCENARIO',fields.scenario,4000],['DIALOGUE EXAMPLES / VOICE',fields.examples,4000],['CHARACTER NOTES',fields.notes,3000]];
+    return '=== '+(recipient?'RECIPIENT CHARACTER CARD':'CURRENT ROLEPLAY CHARACTER CARD — background, not necessarily the recipient')+' '+JSON.stringify(fields.name)+' ===\n'+
+        sections.filter(([,text])=>text).map(([label,text,budget])=>label+':\n'+clip(text,budget)).join('\n\n');
+}
+function recentHistory(ctx){
+    const rows=[];
+    for(const message of ctx.chat||[]){
+        const text=plain(privateRoleplayText(message));if(!text)continue;
+        rows.push({speaker:message.is_user?(ctx.name1||'User'):(message.name||ctx.name2||'Character'),text});
+    }
+    const chosen=[];let remaining=26000;
+    for(const row of rows.slice(-40).reverse()){
+        const prefix=row.speaker+': ';
+        if(remaining<prefix.length+120)break;
+        const text=clip(row.text,Math.min(6500,remaining-prefix.length-2));
+        chosen.unshift(prefix+text);remaining-=prefix.length+text.length+2;
+    }
+    return {count:chosen.length,text:chosen.join('\n\n'),messages:chosen};
+}
+function memory(ctx){
+    for(let i=(ctx.chat||[]).length-1;i>=0;i--){
+        const summary=ctx.chat[i]?.extra?.memory;
+        if(typeof summary==='string'&&summary.trim()){
+            // A global summary can repeat other people's private app messages.
+            // Use it only when the summarized prefix has no such records.
+            if((ctx.chat||[]).slice(0,i+1).some(message=>message&&!publicRoleplayMessage(message)))return '';
+            return clip(plain(summary),6000);
+        }
+    }
+    if((ctx.chat||[]).some(message=>message&&!publicRoleplayMessage(message)))return '';
+    const summary=ctx.extensionPrompts?.['1_memory']?.value;
+    return typeof summary==='string'?clip(plain(summary),6000):'';
+}
+export function loreText(result){
+    const values=[result?.worldInfoBefore,result?.worldInfoAfter];
+    const strings=value=>{
+        if(typeof value==='string')return value;
+        if(Array.isArray(value))return value.map(strings).filter(Boolean).join('\n');
+        return value&&typeof value==='object'?strings(value.entries||value.content||value.text):'';
+    };
+    for(const key of ['worldInfoExamples','worldInfoDepth','anBefore','anAfter'])values.push(strings(result?.[key]));
+    for(const value of Object.values(result?.outletEntries||{}))values.push(strings(value));
+    if(!values.some(Boolean))values.push(result?.worldInfoString);
+    return [...new Set(values.filter(Boolean))].join('\n');
+}
+export async function buildPhoneConversationContext(contact,{medium='call',transcript=[],utterance='',includeSms=true,members=[]}={}){
+    const ctx=SillyTavern.getContext(),root=getMeta(),key=resolveContactKey(contact.key||contact.name),thread=getThread(key);
+    const activityVersion=getSettings().phoneActivityVersion;
+    const check=()=>{
+        if(getMeta()!==root)throw new Error('Чат изменился во время подготовки контекста.');
+        if(!phoneActivityAllowed(activityVersion))throw Object.assign(new Error('Запрос телефона отменён'),{name:'AbortError'});
+    };
+    check();
+    const original=contactOriginalName(key,contact.originalName||contact.name),label=thread?.name||contact.name||original;
+    const items=characterCards(ctx,key),cards=items.map(item=>({item,fields:fieldsFor(ctx,item)}));
+    const sub=text=>substitute(ctx,text,ctx.name2||original),history=recentHistory(ctx),summary=memory(ctx);
+    let persona='';
+    try{persona=ctx.getCharacterCardFields?.()?.persona||sub('{{persona}}');}catch{/* No card API on older hosts. */}
+    if(persona==='{{persona}}')persona='';
+    const sms=JSON.stringify(privateThreadTurns(thread?.messages,{user:ctx.name1||'User',peer:original,limit:12}));
+    const channel=medium==='sms'?'SMS':medium==='direct'?'INSTAGRAM DIRECT':'PHONE CALL';
+    const blocks=[
+        'You are continuing a private roleplay '+channel+' '+(members.length?'in group '+JSON.stringify(original)+'; reply only as its established members '+JSON.stringify(members):'as '+JSON.stringify(original))+'. Use the character definitions and established story events below as canon. Return only the requested app JSON, without adding a roleplay turn.',
+        members.length?'GROUP IDENTITY: '+JSON.stringify(original)+'; members '+JSON.stringify(members)+'. Each member keeps their own voice and knowledge.':
+            'CONTACT IDENTITY: canonical character '+JSON.stringify(original)+'; permanent key '+JSON.stringify(key)+'; saved by the user as '+JSON.stringify(label)+'. The saved name is their personal label for the same person, not a new identity. Know how the user named this contact.',
+        cards.map(({item,fields})=>formatCard(fields,item.recipient)).join('\n\n')
+    ];
+    if(persona)blocks.push('=== USER PERSONA ===\n'+clip(persona,4000));
+    if(summary)blocks.push('=== EXISTING STORY SUMMARY / MEMORY ===\n'+summary);
+    if(history.text)blocks.push('=== RECENT ROLEPLAY HISTORY — chronological, up to 40 messages ===\n'+history.text);
+    if(includeSms&&thread?.messages.length)blocks.push('=== PRIVATE MESSAGES WITH THIS CONTACT — forwarded excerpts do not grant access to the source chat ===\n'+sms);
+    let lore='';
+    try{
+        const {getWorldInfoPrompt}=await import('../../../world-info.js');
+        if(typeof getWorldInfoPrompt==='function'){
+            const focus='Private '+channel+' with '+[original,...members].join(', ')+'. '+clip(transcript.slice(-6).map(t=>plain(t.text)).join('\n')+'\n'+plain(utterance),6000);
+            const scanData={personaDescription:persona,characterDescription:cards.map(c=>c.fields.description).join('\n'),characterPersonality:cards.map(c=>c.fields.personality).join('\n'),
+                characterDepthPrompt:cards.map(c=>c.fields.notes).join('\n'),scenario:cards.map(c=>c.fields.scenario).join('\n'),creatorNotes:'',trigger:'normal'};
+            const messages=[focus,...history.messages.slice().reverse()];
+            const result=await getWorldInfoPrompt(messages,Math.max(2048,Math.min(32768,Number(ctx.maxContext)||8192)),true,scanData);
+            lore=clip(sub(loreText(result)),8000);
+        }
+    }catch(e){console.warn('[GlassPhone] private conversation lorebook context:',e);}
+    check();
+    if(lore)blocks.push('=== WORLD / LOREBOOK — relevant activated entries ===\n'+lore);
+    const time=getRpDateTime();
+    if(time)blocks.push('=== CURRENT IN-WORLD TIME ===\n'+JSON.stringify(time)+'. This is the roleplay clock; do not replace it with the computer date.');
+    blocks.push('KNOWLEDGE AND CONTINUITY: The story history is author context, not a public news feed. Remember scenes this participant personally lived through, including private conversations, established relationships, commitments and recent shared events. Do not treat the recipient as an outsider to their own story. Facts about absent people, private thoughts and other phone threads are not automatically known. Own app history is supplied separately; forwarded excerpts reveal only the attached lines. When another character’s card supplies background, do not adopt that character’s identity. Never invent a past event to fill missing context.');
+    logReq('контекст '+channel,'карточки: '+cards.length+' · история: '+history.count+' сообщ. · память: '+(summary?'да':'нет')+' · лорбук: '+lore.length+' симв.');
+    return blocks.filter(Boolean).join('\n\n');
+}
+
+export function buildPhoneCallContext(contact,transcript=[],utterance=''){
+    return buildPhoneConversationContext(contact,{transcript,utterance});
+}
+
