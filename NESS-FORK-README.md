@@ -21,3 +21,7 @@
 Этот форк проверен статически (JavaScript-синтаксис и проверки структурных изменений), но не проходил интерактивного теста с запущенной SillyTavern. Отдельные настройки *подключения к модели*, режимы генерации, установленные приложения и глобальная библиотека коротких пресетов по-прежнему общие. Внешние URL CSS/картинок сохраняются как ссылки. Не импортируйте непроверенные CSS-пресеты от незнакомых авторов.
 
 Лицензия исходного проекта сохранена в `LICENSE`.
+
+## 2026-10-22: Owner autonomy fix
+
+AI-generated Twitter replies, Twitter/Instagram feed posts, Instagram/OnlyFans comments, channel discussions, and Discord messages are rejected when their author matches the user persona or account handle. Manual user actions remain unchanged. Existing unwanted comments can be deleted in their threads; this change does not automatically remove history.

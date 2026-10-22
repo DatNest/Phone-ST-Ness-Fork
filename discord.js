@@ -2,7 +2,7 @@
 // хранится per-chat в meta. Нагрузки на инжект нет — только строки журнала.
 
 import { getMeta, saveMeta } from './state.js';
-import { generateDiscordServers, generateOwnDiscordServer, generateDiscordFeed, logSocialToChat, getUserName } from './social.js';
+import { generateDiscordServers, generateOwnDiscordServer, generateDiscordFeed, logSocialToChat, getUserName, isUserAuthor } from './social.js';
 
 function genId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 
@@ -97,7 +97,9 @@ export async function createOwnDServer(name, theme) {
 }
 
 function pushMessages(ch, arr, cap = 60) {
-    const fresh = (Array.isArray(arr) ? arr : []).filter(x => x && x.author && x.text).map(x => ({
+    const fresh = (Array.isArray(arr) ? arr : [])
+        .filter(x => x && x.author && x.text && !isUserAuthor(x.author))
+        .map(x => ({
         id: genId(),
         author: String(x.author).slice(0, 32),
         read: false,

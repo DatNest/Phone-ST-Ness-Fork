@@ -327,7 +327,7 @@ const IG_TAG_RE = /<!--\s*tel:insta:(\{[\s\S]*?\})\s*-->/gi;
 // Это сама {{user}}? Модель иногда постит от её лица — такие теги
 // отбрасываем: свои посты она пишет только руками, из телефона.
 // К базовой проверке добавляем авто-ник, который знает только этот модуль.
-function isUserAuthor(name) {
+export function isUserAuthor(name) {
     if (isUserName(name)) return true;
     const k = keyOf(stripHandle(name));
     return !!k && k === keyOf(stripHandle(makeHandle(getUserName())));
@@ -719,6 +719,7 @@ ${wantDesc
     if (!Array.isArray(post.comments)) post.comments = [];
     for (const it of parsed) {
         if (!it || !it.author || !it.text) continue;
+        if (isUserAuthor(it.author) || isUserAuthor(it.handle)) continue;
         if (isBanned(it.author, it.handle)) continue;
         if (post.comments.length >= MAX_COMMENTS) break;
         const tip = Math.max(0, Math.min(500, parseInt(it.tip) || 0));
@@ -1687,6 +1688,7 @@ For quote-retweets: {"author":"...","handle":"...","text":"their commentary","ty
     let added = 0;
     for (const it of parsed) {
         if (!it || !it.author || !it.text) continue;
+        if (isUserAuthor(it.author) || isUserAuthor(it.handle)) continue;
         if (isBanned(it.author, it.handle)) continue;
         const tw = {
             id: genId(), author: String(it.author), handle: it.handle || makeHandle(it.author),
@@ -1721,7 +1723,7 @@ ${tweet.advertisement ? `This is a PAID AD for ${tweet.advertisement.brand} (${t
 ${existing ? `Existing replies (do not repeat):\n${existing}\n` : ''}
 ${contactsBlock()}
 
-Generate 4-7 replies: known characters in-character when relevant + random accounts (fans, haters, reply guys, bots). Realistic engagement — some agree, some argue, some joke. Max 280 chars each. NO emojis. Add sentiment="positive|neutral|negative" to every reply.
+Generate 4-7 replies: known characters in-character when relevant + random accounts (fans, haters, reply guys, bots). NEVER write a reply as ${getUserName()} or from their account/handle; the user writes only by pressing Send. Realistic engagement — some agree, some argue, some joke. Max 280 chars each. NO emojis. Add sentiment="positive|neutral|negative" to every reply.
 ${uiLangLine()}
 ${JSON_RULES}
 Format: [{"author":"Имя","handle":"@handle","text":"...","type":"contact|random","sentiment":"positive|neutral|negative"},...]`;
@@ -1732,6 +1734,8 @@ Format: [{"author":"Имя","handle":"@handle","text":"...","type":"contact|rand
     if (!Array.isArray(tweet.replies)) tweet.replies = [];
     for (const it of parsed) {
         if (!it || !it.author || !it.text) continue;
+        // Never create a reply from the owner's persona, even if the model ignores instructions.
+        if (isUserAuthor(it.author) || isUserAuthor(it.handle)) continue;
         if (isBanned(it.author, it.handle)) continue;
         if (tweet.replies.length >= MAX_COMMENTS) break;
         tweet.replies.push({
@@ -1821,6 +1825,7 @@ Format: [{"author":"Имя","photo":"описание кадра","caption":"...
     let added = 0;
     for (const it of parsed) {
         if (!it || !it.author || (!it.photo && !it.caption)) continue;
+        if (isUserAuthor(it.author) || isUserAuthor(it.handle)) continue;
         if (isBanned(it.author, it.handle)) continue;
         s.igPosts.unshift({
             id: genId(), author: String(it.author),
@@ -2336,7 +2341,7 @@ ${formatLine}`;
     if (!Array.isArray(post.comments)) post.comments = [];
     for (const it of parsed) {
         if (!it || !it.author || !it.text) continue;
-        if (isBanned(it.author, it.handle)||isUserName(it.author)) continue;
+        if (isBanned(it.author, it.handle)||isUserAuthor(it.author)||isUserAuthor(it.handle)) continue;
         if(post.comments.some(comment=>comment.author===String(it.author)&&comment.text===String(it.text)))continue;
         if (post.comments.length >= MAX_IG_COMMENTS) break;
         const comment={
