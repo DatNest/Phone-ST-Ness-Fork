@@ -54,6 +54,7 @@ import {
     handleFor, setContactHandle, setUserHandle, getUserHandle, describePostImage, generatePrivateSmsReply, logSocialToChat, getSocialJournalEntries, logIgPost, logFeedDigest,
     settleSocialPost, maybeGenerateStoryEvent, resolveStoryEvent, generateAdvertisingOffers,
     getStories, activeStories, addStory, deleteStory, bumpStoryViews, toggleStoryLike, generateContactStories, generateStoryReactions,
+    commenterAvatarSrc, setCommenterAvatar, randomizeCommenterAvatar,
     generateRepLabel, generateGroupChats,
     generateChannels, generateChannelPosts, generateChannelComments, generateMyChannelFeedback, generatePersonChannel,
     generateAnonFeed, generateAnonComments, resolveAnonAuthor, generateTinderDeck,
@@ -199,9 +200,68 @@ function initialOf(name) {
 // Аватар: фото если загружено, иначе градиент с инициалом
 function avatarHtml(name, avatarUrl, cls = 'gp-avatar') {
     if (avatarUrl) {
-        return `<div class="${cls} gp-avatar-img"><img src="${esc(avatarUrl)}" alt=""></div>`;
+        return `<div class="${cls} gp-avatar-img gp-avatar-fallback-wrap" style="${avatarStyle(name)}"><span class="gp-avatar-fallback">${initialOf(name)}</span><img src="${esc(avatarUrl)}" alt="" loading="lazy" onerror="this.style.opacity='0'"></div>`;
     }
     return `<div class="${cls}" style="${avatarStyle(name)}">${initialOf(name)}</div>`;
+}
+
+// Avatar overrides belong to a social account, not to an individual comment.
+// Reused in Twitter / Instagram / OF and survives chat reloads.
+function bindCommentAvatarPicker(screen, comments) {
+    screen.querySelectorAll('[data-comment-avatar]').forEach(button => {
+        button.onclick = event => {
+            event.stopPropagation();
+            const comment = comments.find(item => String(item.id) === button.dataset.commentAvatar);
+            if (!comment || comment.ak === 'user') return;
+            const owner = getMeta();
+            const current = () => owner === getMeta();
+            const title = 'Аватар: ' + String(comment.author || 'Аккаунт');
+            const dialog = openPhoneSheet(screen, title, `
+                <div class="gp-comment-avatar-picker">
+                    <div class="gp-comment-avatar-preview">${avatarHtml(comment.author, commenterAvatarSrc(comment), 'gp-avatar')}</div>
+                    <p>Аватар сохраняется для этого автора и используется во всех его комментариях.</p>
+                    <button type="button" class="gp-btn gp-avatar-random" data-avatar-random>👤 Случайный портрет из интернета</button>
+                    <button type="button" class="gp-btn" data-avatar-photo>🖼 Случайная картинка из интернета</button>
+                    <label class="gp-comment-avatar-file">📁 Загрузить своё фото<input type="file" accept="image/*" data-avatar-file></label>
+                    <label>Ссылка на изображение (https://)<input type="url" placeholder="https://example.com/avatar.jpg" data-avatar-link></label>
+                    <button type="button" class="gp-btn" data-avatar-link-save>Сохранить ссылку</button>
+                    <button type="button" class="gp-btn" data-avatar-default>Вернуть стандартную аватарку</button>
+                    <small data-avatar-error></small>
+                </div>`, 'comment-avatar');
+            const status=dialog.querySelector('[data-avatar-error]');
+            const closeAndRefresh=()=>{closePhoneSheet(dialog);if(current())render();};
+            dialog.querySelector('[data-avatar-random]').onclick=()=>{
+                if (!current()) return;
+                randomizeCommenterAvatar(comment);closeAndRefresh();
+            };
+            dialog.querySelector('[data-avatar-photo]').onclick=()=>{
+                if (!current()) return;
+                randomizeCommenterAvatar(comment,'photo');closeAndRefresh();
+            };
+            dialog.querySelector('[data-avatar-default]').onclick=()=>{
+                if (!current()) return;
+                setCommenterAvatar(comment,'');closeAndRefresh();
+            };
+            dialog.querySelector('[data-avatar-link-save]').onclick=()=>{
+                if (!current()) return;
+                const url=dialog.querySelector('[data-avatar-link]').value.trim();
+                if(!/^https:\/\/[^\s<>"']+$/i.test(url)){
+                    status.textContent='Нужна прямая ссылка https:// на изображение.';return;
+                }
+                setCommenterAvatar(comment,url);closeAndRefresh();
+            };
+            dialog.querySelector('[data-avatar-file]').onchange=async event=>{
+                const file=event.target.files?.[0];if(!file)return;
+                if(!file.type.startsWith('image/')){status.textContent='Выбери файл изображения.';return;}
+                status.textContent='Обрабатываю изображение…';
+                try{
+                    const src=await compressImage(file,320,.8);
+                    if(!current()||!dialog.isConnected)return;
+                    setCommenterAvatar(comment,src);closeAndRefresh();
+                }catch(error){if(dialog.isConnected)status.textContent=String(error?.message||error);}
+            };
+        };
+    });
 }
 
 function brand(name) { return `<i class="fa-brands ${name}"></i>`; }
@@ -2611,7 +2671,7 @@ function twCard(t, { clickable = true } = {}) {
 
     return `
     <div class="gp-tw-card${clickable ? ' gp-clickable' : ''}" data-tweet="${esc(t.id)}">
-        ${avatarHtml(t.author, avatarForAuthor(t.ak), 'gp-avatar gp-avatar-sm')}
+        ${avatarHtml(t.author, avatarForAuthor(t.ak, t.author), 'gp-avatar gp-avatar-sm')}
         <div class="gp-tw-body">
             <div class="gp-tw-meta">
                 <span class="gp-tw-name">${esc(t.author)}</span>
@@ -2805,7 +2865,7 @@ function renderTwThread(screen) {
                     ? `<div class="gp-empty-text gp-replies-empty">Комментариев нет — нажми ${ic('fa-comments')}</div>`
                     : replies.map(r => `
                     <div class="gp-reply">
-                        ${avatarHtml(r.author, r.avatar || avatarForAuthor(r.ak), 'gp-avatar gp-avatar-xs')}
+                        ${r.ak === 'user' ? avatarHtml(r.author, avatarForAuthor('user'), 'gp-avatar gp-avatar-xs') : `<button type="button" class="gp-comment-avatar-button" data-comment-avatar="${esc(r.id)}" title="Изменить аватар автора" aria-label="Изменить аватар ${esc(r.author)}">${avatarHtml(r.author, commenterAvatarSrc(r), 'gp-avatar gp-avatar-xs')}</button>`}
                         <div class="gp-reply-body">
                             <div class="gp-tw-meta">
                                 <span class="gp-tw-name">${esc(r.author)}</span>
@@ -2827,6 +2887,7 @@ function renderTwThread(screen) {
 
     screen.querySelector('#gp-back')?.addEventListener('click', () => goto('tw'));
     bindTwCardActions(screen, () => render());
+    bindCommentAvatarPicker(screen, replies);
 
     const input = screen.querySelector('#gp-input');
 
@@ -3019,7 +3080,7 @@ function igCard(p, { clickable = true } = {}) {
     return `
     <div class="gp-ig-card" data-post="${esc(p.id)}">
         <div class="gp-ig-head">
-            ${avatarHtml(p.author, avatarForAuthor(p.ak), 'gp-avatar gp-avatar-xs')}
+            ${avatarHtml(p.author, avatarForAuthor(p.ak, p.author), 'gp-avatar gp-avatar-xs')}
             <span class="gp-ig-nameblock">
                 <span class="gp-ig-name">${esc(p.author)}</span>
                 <span class="gp-ig-handle">${esc(handle)}</span>
@@ -3259,7 +3320,7 @@ function renderIgView(screen) {
                     ? `<div class="gp-empty-text gp-replies-empty">Пока нет комментариев</div>`
                     : comments.map(c => `
                     <div class="gp-reply">
-                        ${avatarHtml(c.author, c.avatar || avatarForAuthor(c.ak), 'gp-avatar gp-avatar-xs')}
+                        ${c.ak === 'user' ? avatarHtml(c.author, avatarForAuthor('user'), 'gp-avatar gp-avatar-xs') : `<button type="button" class="gp-comment-avatar-button" data-comment-avatar="${esc(c.id)}" title="Изменить аватар автора" aria-label="Изменить аватар ${esc(c.author)}">${avatarHtml(c.author, commenterAvatarSrc(c), 'gp-avatar gp-avatar-xs')}</button>`}
                         <div class="gp-reply-body">
                             <div class="gp-tw-meta">
                                 <span class="gp-tw-name">${esc(c.author)}</span>
@@ -3283,6 +3344,7 @@ function renderIgView(screen) {
 
     screen.querySelector('#gp-back')?.addEventListener('click', () => goto('ig'));
     bindIgCardActions(screen);
+    bindCommentAvatarPicker(screen, comments);
 
     const input = screen.querySelector('#gp-input');
 
@@ -3428,7 +3490,7 @@ function igStoriesRow() {
             <button type="button" class="gp-igst-add-small" id="gp-ig-story-add" aria-label="Добавить историю">${bankIcon('Plus')}</button></div>
             ${others.map(o => `
             <button class="gp-igst-bubble gp-igst-has" data-storyauthor="${esc(o.author)}">
-                <span class="gp-igst-ring">${avatarHtml(o.author, avatarForAuthor(o.ak), 'gp-avatar')}</span>
+                <span class="gp-igst-ring">${avatarHtml(o.author, avatarForAuthor(o.ak, o.author), 'gp-avatar')}</span>
                 <i>${esc(o.author)}</i>
             </button>`).join('')}
         </div>`;
@@ -3568,7 +3630,7 @@ function renderIgStory(screen) {
     const st = stories[_storyIdx];
     const isMine = st.ak === 'user';
     const authorName = isMine ? getUserName() : (st.author || '?');
-    const authorAva = avatarHtml(authorName, avatarForAuthor(isMine ? 'user' : st.ak), 'gp-avatar gp-avatar-sm');
+    const authorAva = avatarHtml(authorName, avatarForAuthor(isMine ? 'user' : st.ak, authorName), 'gp-avatar gp-avatar-sm');
     const views = isMine ? bumpStoryViews(st) : 0;
     const ageMin = Math.max(1, Math.round((Date.now() - st.time) / 60000));
     const ageLabel = ageMin < 60 ? `${ageMin} м` : `${Math.round(ageMin / 60)} ч`;
@@ -3755,7 +3817,7 @@ function ofCard(p, { clickable = true } = {}) {
     return `
     <div class="gp-ig-card gp-of-card" data-post="${esc(p.id)}">
         <div class="gp-ig-head">
-            ${avatarHtml(p.author, avatarForAuthor(p.ak), 'gp-avatar gp-avatar-xs')}
+            ${avatarHtml(p.author, avatarForAuthor(p.ak, p.author), 'gp-avatar gp-avatar-xs')}
             <span class="gp-ig-name">${esc(p.author)}</span>
             <span class="gp-of-badge">${ic('fa-lock')}${p.price > 0 ? ` $${p.price}` : ' подписка'}</span>
             <span class="gp-tw-time">· ${esc(timeAgo(p.time))}</span>
@@ -3842,7 +3904,7 @@ function renderOfView(screen) {
                     ? `<div class="gp-empty-text gp-replies-empty">Реакций нет — нажми ${ic('fa-comments')}, фанаты налетят</div>`
                     : comments.map(c => `
                     <div class="gp-reply">
-                        ${avatarHtml(c.author, avatarForAuthor(c.ak), 'gp-avatar gp-avatar-xs')}
+                        ${c.ak === 'user' ? avatarHtml(c.author, avatarForAuthor('user'), 'gp-avatar gp-avatar-xs') : `<button type="button" class="gp-comment-avatar-button" data-comment-avatar="${esc(c.id)}" title="Изменить аватар автора" aria-label="Изменить аватар ${esc(c.author)}">${avatarHtml(c.author, commenterAvatarSrc(c), 'gp-avatar gp-avatar-xs')}</button>`}
                         <div class="gp-reply-body">
                             <div class="gp-tw-meta">
                                 <span class="gp-tw-name">${esc(c.author)}</span>
@@ -3863,6 +3925,7 @@ function renderOfView(screen) {
     screen.querySelector('#gp-back')?.addEventListener('click', () => goto('of'));
     bindOfCardActions(screen);
     bindDescEdit(screen, p);
+    bindCommentAvatarPicker(screen, comments);
 
     screen.querySelectorAll('[data-del-ofcomment]').forEach(b => b.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -6372,7 +6435,7 @@ function renderChanPost(screen) {
         const quoted = quotedFor(all, ci, c.replyTo);
         // Содержимое пузыря склеиваем без переносов: у .gp-bubble white-space
         // pre-wrap, и отступы разметки превратились бы в пустые строки в тексте
-        const sender = mine ? '' : `<div class="gp-bubble-sender" style="color:${senderColor(c.author)}">${esc(c.author)}${c.handle ? ` <i>${esc(c.handle)}</i>` : ''}</div>`;
+        const sender = mine ? '' : `<div class="gp-bubble-sender gp-chan-senderline" style="color:${senderColor(c.author)}"><button type="button" class="gp-comment-avatar-button gp-chan-comment-avatar" data-comment-avatar="${esc(c.id)}" title="Изменить аватар автора" aria-label="Изменить аватар ${esc(c.author)}">${avatarHtml(c.author, commenterAvatarSrc(c), 'gp-avatar gp-avatar-xs')}</button><span>${esc(c.author)}${c.handle ? ` <i>${esc(c.handle)}</i>` : ''}</span></div>`;
         const quote = c.replyTo
             ? `<div class="gp-chan-quote"><b>${esc(c.replyTo)}</b><span>${esc(String(quoted?.text || 'комментарий').slice(0, 70))}</span></div>`
             : '';
@@ -6406,6 +6469,7 @@ function renderChanPost(screen) {
             </div>
         </div>`);
 
+    bindCommentAvatarPicker(screen, all);
     screen.querySelector('#gp-back')?.addEventListener('click', () => goto('chan'));
     screen.querySelector('[data-anonbuy]')?.addEventListener('click', () => anonBuySheet(post));
     screen.querySelector('#gp-chan-replyoff')?.addEventListener('click', () => { _chanReplyTo = null; render(); });

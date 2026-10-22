@@ -25,3 +25,20 @@
 ## 2026-10-22: Owner autonomy fix
 
 AI-generated Twitter replies, Twitter/Instagram feed posts, Instagram/OnlyFans comments, channel discussions, and Discord messages are rejected when their author matches the user persona or account handle. Manual user actions remain unchanged. Existing unwanted comments can be deleted in their threads; this change does not automatically remove history.
+
+
+## Ness 2.54.0 — Narrrator RP / commenter avatars
+
+* Fixed fork baseline: No Auto User. The user's own posts/comments remain manual-only.
+* Per-chat narrator mode: **Settings → Model and context → Ролевая с нарратором**.
+  - Rich narrator card description, scenario, voice examples, activated lorebook entries and RP history supply world and ensemble context.
+  - Active Narrator card name is never treated as a social actor.
+  - Explicit RP participants may be offered as cast, but a mention does not create a contact, phone number or shared knowledge.
+  - Narrator roster remembers names inferred from publicly visible RP dialogue labels (max 45). Specific private app messages are excluded.
+* Commenters in Twitter, Instagram and OnlyFans: tap or click their avatar to change it.
+  - A per-account override persists across comments in the current chat.
+  - Upload a photo, paste a direct HTTPS image URL, use another random internet image, or reset.
+  - When no own/contact avatar exists, a stable portrait comes from i.pravatar.cc (internet required). If blocked/offline, initials remain.
+  - This service uses generic stock portraits, not actual likenesses of roleplay characters. For established characters choose their own image.
+* Old wallpaper, icons, custom CSS and social histories are not intentionally migrated/reset.
+* Narrator mode affects text context and account selection; it does not rewrite narrator character cards.

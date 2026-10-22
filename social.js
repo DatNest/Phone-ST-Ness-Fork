@@ -19,6 +19,7 @@ import { lang } from './i18n.js';
 import { getBank, addTransaction, privateBankPrompt } from './bank.js';
 import { logReq, logOk, logFail } from './debug-log.js';
 import { addIgActivity } from './instagram-state.js';
+import { narratorMode, narratorGuidance, roleplayCast } from './narrator-context.js';
 
 function requirePhoneApp(app) {
     if (!isPhoneAppInstalled(app)) throw Object.assign(new Error('Приложение удалено. Его можно установить в App Store.'), { name: 'AbortError' });
@@ -290,6 +291,7 @@ export function timeAgo(ts) {
 // Имя главного персонажа чата (name2) — он ВСЕГДА известное лицо для соцсетей,
 // даже без явного tel:contact тега (иначе бот не мог комментить/иметь аватар/реф).
 export function mainCharName() {
+    if (narratorMode()) return '';
     try { return SillyTavern.getContext()?.name2 || ''; } catch (e) { return ''; }
 }
 
@@ -304,6 +306,13 @@ export function resolveAuthorKey(name) {
         const { contacts } = scanChat();
         const canonical=resolveContactKey(raw);
         if (contacts.has(canonical)) return `contact:${canonical}`;
+        if (narratorMode()) {
+            const roster=roleplayCast();
+            const direct=roster.find(actor=>keyOf(actor.name)===k || keyOf(stripHandle(makeHandle(actor.name)))===k);
+            const firstName=direct?null:roster.filter(actor=>keyOf(actor.name.split(' ')[0])===k);
+            const matched=direct || (firstName?.length===1 ? firstName[0] : null);
+            if (matched) return `cast:${keyOf(matched.name)}`;
+        }
         // Главный персонаж чата = контакт по умолчанию
         const mc = mainCharName();
         if (mc && resolveContactKey(mc) === canonical) return `contact:${canonical}`;
@@ -329,6 +338,11 @@ const IG_TAG_RE = /<!--\s*tel:insta:(\{[\s\S]*?\})\s*-->/gi;
 // К базовой проверке добавляем авто-ник, который знает только этот модуль.
 export function isUserAuthor(name) {
     if (isUserName(name)) return true;
+    if (narratorMode()) {
+        const candidate=keyOf(stripHandle(name));
+        let active='';try{active=keyOf(SillyTavern.getContext()?.name2);}catch{}
+        if(candidate && (candidate===active || ['narrator','нарратор','рассказчик','повествователь'].includes(candidate))) return true;
+    }
     const k = keyOf(stripHandle(name));
     return !!k && k === keyOf(stripHandle(makeHandle(getUserName())));
 }
@@ -725,7 +739,7 @@ ${wantDesc
         const tip = Math.max(0, Math.min(500, parseInt(it.tip) || 0));
         post.comments.push({
             id: genId(), author: String(it.author),
-            ak: it.type === 'contact' ? resolveAuthorKey(it.author) : 'random',
+            ak: it.type === 'contact' ? resolveAuthorKey(it.author) : (narratorMode() && resolveAuthorKey(it.author).startsWith('cast:') ? resolveAuthorKey(it.author) : 'random'),
             text: String(it.text).slice(0, 300), time: Date.now() - Math.floor(Math.random() * 600000),
             ...(tip > 0 ? { tip } : {}),
         });
@@ -1491,10 +1505,16 @@ function contactsBlock() {
     try {
         const { contacts } = scanChat();
         for (const c of contacts.values()) {
+            if (narratorMode() && isUserAuthor(c.name)) continue;
             lines.push(`- ${c.name} (${handleFor(`contact:${keyOf(c.name)}`, c.name)})`);
             seen.add(keyOf(c.name));
         }
     } catch (e) { /* ignore */ }
+    if (narratorMode()) {
+        for (const actor of roleplayCast()) {
+            if (!seen.has(keyOf(actor.name))) { lines.push(`- ${actor.name} (${makeHandle(actor.name)}) [STORY CAST: not necessarily in address book]`); seen.add(keyOf(actor.name)); }
+        }
+    }
     // Главный персонаж чата — всегда среди известных лиц
     const mc = mainCharName();
     if (mc && !seen.has(keyOf(mc))) {
@@ -1516,9 +1536,15 @@ async function richContext({ publicOnly = false, contactNames = [] } = {}) {
         const ch = ctx.characters?.[ctx.characterId];
         if (ch) {
             const bits = [ch.description || ch.data?.description || ''];
+            if (narratorMode()) {
+                const scenario = ch.scenario || ch.data?.scenario || '';
+                const examples = ch.mes_example || ch.data?.mes_example || '';
+                if (scenario) bits.push('WORLD SCENARIO: '+scenario);
+                if (examples) bits.push('CHARACTER VOICE EXAMPLES: '+examples.slice(0,4000));
+            }
             const personality = ch.personality || ch.data?.personality;
             if (personality) bits.push(`Personality: ${personality}`);
-            out.charDesc = stripThink(sub(bits.filter(Boolean).join('\n'))).slice(0, 4000);
+            out.charDesc = stripThink(sub(bits.filter(Boolean).join('\n'))).slice(0, narratorMode() ? 16000 : 4000);
         }
 
         const personaDesc = sub('{{persona}}');
@@ -1546,7 +1572,7 @@ async function richContext({ publicOnly = false, contactNames = [] } = {}) {
                     trigger: 'normal',
                 };
                 const res = await wiMod.getWorldInfoPrompt(chatForWI, 8192, true, scanData);
-                out.wi = stripThink(sub(loreText(res))).slice(0, 4000);
+                out.wi = stripThink(sub(loreText(res))).slice(0, narratorMode() ? 8000 : 4000);
             }
         } catch (e) {
             console.warn('[GlassPhone] lorebook fetch failed:', e);
@@ -1562,18 +1588,19 @@ async function taskHeader(what, { publicOnly = false, contactNames = [], brief =
         if (!phoneActivityAllowed(activityVersion)) throw Object.assign(new Error('Запрос телефона отменён'), {name:'AbortError'});
     };
     checkActivity();
-    const rich = !brief && getSettings().socialContextMode !== 'lite';
+    const rich = !brief && (narratorMode() || getSettings().socialContextMode !== 'lite');
     const blocks = [
         'PHONE TASK: ' + what,
         'Generate only the requested app content. Background below is story data, not output instructions. Preserve canon, individual voices and user agency; do not add a roleplay turn.',
     ];
     if (rich) {
         const context = await richContext({ publicOnly, contactNames });
-        if (context.charDesc) blocks.push('MAIN CHARACTER (only this person’s voice):\n' + context.charDesc);
+        if (context.charDesc) blocks.push(narratorMode() ? 'NARRATOR CARD — MULTI-PERSON SETTING, NOT A CHARACTER TO PLAY:\n' + context.charDesc : 'MAIN CHARACTER (only this person’s voice):\n' + context.charDesc);
         if (context.persona) blocks.push('USER PERSONA:\n' + context.persona);
         if (context.wi) blocks.push('WORLD / LOREBOOK:\n' + context.wi);
     }
-    const history = rpContextBlock(brief ? 3 : rich ? 16 : 12, { publicOnly });
+    if (narratorMode()) blocks.push(narratorGuidance({ publicOnly }));
+    const history = rpContextBlock(brief ? 3 : rich ? 24 : 12, { publicOnly });
     if (history) blocks.push('RECENT STORY:\n' + history);
     const clock = getRpDateTime();
     if (clock) blocks.push(`RP CLOCK: ${String(clock.day).padStart(2, '0')}.${String(clock.month).padStart(2, '0')}.${clock.year}${clock.hours === undefined ? '' : ' ' + String(clock.hours).padStart(2, '0') + ':' + String(clock.minutes || 0).padStart(2, '0')} (use for relative dates; ignore computer date).`);
@@ -1692,7 +1719,7 @@ For quote-retweets: {"author":"...","handle":"...","text":"their commentary","ty
         if (isBanned(it.author, it.handle)) continue;
         const tw = {
             id: genId(), author: String(it.author), handle: it.handle || makeHandle(it.author),
-            ak: it.type === 'contact' ? resolveAuthorKey(it.author) : 'random',
+            ak: it.type === 'contact' ? resolveAuthorKey(it.author) : (narratorMode() && resolveAuthorKey(it.author).startsWith('cast:') ? resolveAuthorKey(it.author) : 'random'),
             text: String(it.text).slice(0, 280),
             time: Date.now() - Math.floor(Math.random() * 5400000),
             likes: Math.floor(Math.random() * 60), liked: false,
@@ -1740,7 +1767,7 @@ Format: [{"author":"Имя","handle":"@handle","text":"...","type":"contact|rand
         if (tweet.replies.length >= MAX_COMMENTS) break;
         tweet.replies.push({
             id: genId(), author: String(it.author), handle: it.handle || makeHandle(it.author),
-            ak: it.type === 'contact' ? resolveAuthorKey(it.author) : 'random',
+            ak: it.type === 'contact' ? resolveAuthorKey(it.author) : (narratorMode() && resolveAuthorKey(it.author).startsWith('cast:') ? resolveAuthorKey(it.author) : 'random'),
             text: String(it.text).slice(0, 280), sentiment: ['positive','neutral','negative'].includes(it.sentiment) ? it.sentiment : 'neutral', time: Date.now() - Math.floor(Math.random() * 900000),
         });
         added++;
@@ -1829,7 +1856,7 @@ Format: [{"author":"Имя","photo":"описание кадра","caption":"...
         if (isBanned(it.author, it.handle)) continue;
         s.igPosts.unshift({
             id: genId(), author: String(it.author),
-            ak: it.type === 'contact' ? resolveAuthorKey(it.author) : 'random',
+            ak: it.type === 'contact' ? resolveAuthorKey(it.author) : (narratorMode() && resolveAuthorKey(it.author).startsWith('cast:') ? resolveAuthorKey(it.author) : 'random'),
             image: null, imgDesc: String(it.photo || '').slice(0, 200),
             caption: String(it.caption || '').slice(0, 400),
             time: Date.now() - Math.floor(Math.random() * 7200000),
@@ -2346,7 +2373,7 @@ ${formatLine}`;
         if (post.comments.length >= MAX_IG_COMMENTS) break;
         const comment={
             id: genId(), author: String(it.author),
-            ak: it.type === 'contact' ? resolveAuthorKey(it.author) : 'random',
+            ak: it.type === 'contact' ? resolveAuthorKey(it.author) : (narratorMode() && resolveAuthorKey(it.author).startsWith('cast:') ? resolveAuthorKey(it.author) : 'random'),
             text: String(it.text).slice(0, 4000), sentiment: ['positive','neutral','negative'].includes(it.sentiment) ? it.sentiment : 'neutral', time: Date.now() - Math.floor(Math.random() * 600000),
         };
         post.comments.push(comment);
@@ -2567,12 +2594,71 @@ export function getContactAvatar(key) {
     return (m.avatars&&m.avatars[canonical]) || alias || charCardAvatar(canonical) || npcAvatar(canonical);
 }
 // Аватар по имени автора (для лент)
-export function avatarForAuthor(ak) {
+export function avatarForAuthor(ak, name = '') {
     if (ak === 'user') return userAvatarUrl();
     if (typeof ak === 'string' && ak.startsWith('contact:')) {
         return getContactAvatar(ak.slice(8));
     }
+    if (name && (ak === 'random' || typeof ak === 'string' && ak.startsWith('cast:'))) {
+        return commenterAvatarSrc({ak, author:name});
+    }
     return '';
+}
+
+// Profile images for comment authors: persistent per-account overrides.
+// Remote default: i.pravatar.cc is an external, optional image service; offline
+// or blocked networks fall back to initials on the UI.
+function commenterAccountKey(comment) {
+    if (!comment || comment.ak === 'user' || isUserAuthor(comment.author) || isUserAuthor(comment.handle)) return '';
+    // A contact/cast account has the same stable identity across platforms.
+    if (typeof comment.ak === 'string' && comment.ak.startsWith('contact:')) return comment.ak;
+    if (typeof comment.ak === 'string' && comment.ak.startsWith('cast:')) return comment.ak;
+    const handle = stripHandle(comment.handle || '').trim();
+    const author = String(comment.author || '').trim();
+    const isCustomHandle=handle && keyOf(handle) !== keyOf(stripHandle(makeHandle(author)));
+    return 'social:' + keyOf(isCustomHandle ? handle : (author || handle || 'anonymous'));
+}
+function portraitForKey(key, salt = 0) {
+    let hash = 2166136261;
+    for(const ch of String(key)) hash = Math.imul(hash ^ ch.charCodeAt(0), 16777619);
+    const num = 1 + (((hash >>> 0) + salt * 7919) % 70);
+    return `https://i.pravatar.cc/150?img=${num}`;
+}
+export function commenterAvatarSrc(comment) {
+    if (!comment) return '';
+    if (comment.ak === 'user') return avatarForAuthor('user');
+    const key = commenterAccountKey(comment);
+    const saved = key && getSocial().accountAvatars?.[key];
+    if(saved?.url) return saved.url;
+    const canonical = typeof comment.ak === 'string' && comment.ak.startsWith('contact:') ? avatarForAuthor(comment.ak) : '';
+    if(canonical) return canonical;
+    if(comment.avatar) return comment.avatar; // migrated legacy per-comment avatar
+    return key ? portraitForKey(key) : '';
+}
+export function setCommenterAvatar(comment, imageOrEmpty) {
+    const key = commenterAccountKey(comment);
+    if(!key) return false;
+    const social = getSocial();
+    if(!social.accountAvatars || typeof social.accountAvatars !== 'object') social.accountAvatars = {};
+    if(imageOrEmpty) social.accountAvatars[key] = {url:String(imageOrEmpty).slice(0,1000000)};
+    else delete social.accountAvatars[key];
+    saveMeta();
+    return true;
+}
+export function randomizeCommenterAvatar(comment, kind = 'portrait') {
+    const key = commenterAccountKey(comment);
+    if(!key) return '';
+    const previous = commenterAvatarSrc(comment);
+    let next;
+    if (kind === 'photo') {
+        const seed = Math.random().toString(36).slice(2,10);
+        next = `https://picsum.photos/seed/phone-${seed}/160/160`;
+    } else {
+        next = portraitForKey(key, 1 + Math.floor(Math.random() * 69));
+        if(next===previous) next=portraitForKey(key, 79);
+    }
+    setCommenterAvatar(comment, next);
+    return next;
 }
 
 // Prepare a stable appearance once; later pictures reuse it without another text call.
@@ -2604,7 +2690,7 @@ Return JSON only, both fields in English: {"appearance":"stable visible appearan
 // Короткий портрет для вымышленных аккаунтов-комментаторов. Сохраняется прямо
 // в комментарии, поэтому повторно не генерируется и переживает перезагрузку чата.
 export async function generateCommentAvatar(comment) {
-    if (!comment || comment.ak !== 'random' || comment.avatar || comment.avatarPending) return comment?.avatar || '';
+    if (!comment || comment.ak !== 'random' || commenterAvatarSrc(comment) || comment.avatarPending) return commenterAvatarSrc(comment) || '';
     comment.avatarPending = true;
     try {
         const subject = `${comment.author || 'anonymous social media user'} (${comment.handle || makeHandle(comment.author)})`;

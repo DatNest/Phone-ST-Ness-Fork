@@ -1,7 +1,7 @@
 import { registerPhoneSettings } from './phone-settings.js';
 
 import { eventSource, event_types, saveSettingsDebounced, saveChatConditional } from '../../../../script.js';
-import { getSettings, getMeta, GP_VERSION, invalidateChatCache, factoryReset, wipePhoneTraces, captureRoleplayOutgoing, setPhoneQuietMode } from './state.js';
+import { getSettings, getMeta, saveMeta, GP_VERSION, invalidateChatCache, factoryReset, wipePhoneTraces, captureRoleplayOutgoing, setPhoneQuietMode } from './state.js';
 import { updatePhoneInjection } from './prompts.js';
 import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, closePhone, applySkin, applyWallpaper, applyChatHiding, toast, notifyBankReminders, notifyDeliveries, deliverScamSms } from './ui.js';
 import { harvestSocialTags, setUserHandle, getUserHandle, listIigProfiles, listIigStyles, listImageBuckets, currentExtModel, stripFakeJournal } from './social.js';
@@ -18,6 +18,7 @@ import { maybeScamSms } from './scam.js';
 import { trDom } from './i18n.js';
 import { buildReport, clearLog } from './debug-log.js';
 import { listPhoneImageBlocks } from './external-image-blocks.js';
+import { roleplayCast } from './narrator-context.js';
 
 // ── CSS ──
 const cssId = 'glassphone-css';
@@ -64,6 +65,7 @@ function setupSettingsPanel() {
                 <label class="gp-settings-field"><span>Макс. длина ответа</span><input type="number" id="gp-set-maxtokens" class="text_pole gp-settings-number" min="0" max="32000" step="256" value="${s.socialMaxTokens || 0}"><small>Верхняя граница; 0 = автоматически по задаче</small></label>
                 <label class="gp-settings-field gp-settings-wide"><span>Профиль генерации телефона</span><span class="gp-settings-control-row"><select id="gp-set-profile" class="text_pole"></select><button class="menu_button gp-settings-icon-button" id="gp-profile-test" type="button" title="Проверить профиль (маленький запрос)" aria-label="Проверить профиль (маленький запрос)"><i class="fa-solid fa-plug-circle-check"></i></button></span><small>SMS, Direct, звонки и соцсети. Без выбранного профиля — текущий API.</small></label>
                 <label class="gp-settings-field"><span>Контекст соцсетей</span><select id="gp-set-ctxmode" class="text_pole"><option value="rich" ${s.socialContextMode !== 'lite' ? 'selected' : ''}>История + лорбук + карточка бота</option><option value="lite" ${s.socialContextMode === 'lite' ? 'selected' : ''}>Только срез истории</option></select><small>SMS, Direct и звонки всегда получают карточку, лорбук и историю ролевой. Чужие переписки исключены.</small></label>
+                <label class="gp-settings-field gp-settings-wide"><span>Ролевая с нарратором</span><span class="gp-settings-checks"><label><input type="checkbox" id="gp-set-narrator" ${getMeta().narratorMode ? 'checked' : ''}><span>Мультиперсонажный режим (для этого чата)</span></label></span><small>Карточка описывает целый мир. Телефон выбирает действующих лиц по истории, карточке и лорбуку, а Narrator не становится аккаунтом. Записи об аккаунтах не создаются автоматически.</small></label>
                 <label class="gp-settings-field"><span>Твой ник (@)</span><input type="text" id="gp-set-handle" class="text_pole" maxlength="21" placeholder="авто из имени"></label>
                 <label class="gp-settings-field"><span>Узнать автора анонимки</span><input type="number" id="gp-set-anonprice" class="text_pole gp-settings-number" min="0" step="100" value="${Number(s.anonRevealPrice) || 2500}"><small>цена первого имени, дальше растёт</small></label>
                 <div class="gp-settings-checks gp-settings-wide">
@@ -463,6 +465,11 @@ function setupSettingsPanel() {
     $('#gp-set-profile').on('change', function () {
         getSettings().socialProfileId = this.value;
         saveSettingsDebounced();
+    });
+    $('#gp-set-narrator').on('change', function () {
+        getMeta().narratorMode = this.checked;
+        saveMeta();
+        toast(this.checked ? 'Режим нарратора включён для этого чата' : 'Режим нарратора выключен', 'fa-users');
     });
     $('#gp-set-ctxmode').on('change', function () {
         getSettings().socialContextMode = this.value;

@@ -11,7 +11,7 @@ import { cleanContactName, contactNameKey, redirectedContactKey, resolveIdentity
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '2.53.1-ness.1';
+export const GP_VERSION = '2.54.0-ness.3';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -166,6 +166,7 @@ export function getMeta() {
     if (!Array.isArray(m.contacts)) m.contacts = [];
     if (!m.lastRead || typeof m.lastRead !== 'object') m.lastRead = {};
     if (!Array.isArray(m.hidden)) m.hidden = [];
+    if (typeof m.narratorMode !== 'boolean') m.narratorMode = false;
     // Ники (@handle): per-chat, override поверх авто-генерации из имени
     if (!m.handles || typeof m.handles !== 'object') m.handles = {};
     if (typeof m.userHandle !== 'string') m.userHandle = '';

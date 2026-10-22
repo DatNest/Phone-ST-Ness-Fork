@@ -16,7 +16,7 @@ export function parkPhoneSettings(){
 }
 export function renderPhoneSettings(screen,api){
     const mounted=screen.querySelector('.gp-phone-settings-mount');
-    if(mounted){if(panel&&panel.parentElement!==mounted)mounted.appendChild(panel);return;}
+    if(mounted){if(panel&&panel.parentElement!==mounted)mounted.appendChild(panel);const check=panel?.querySelector('#gp-set-narrator');if(check)check.checked=!!getMeta().narratorMode;return;}
     parkPhoneSettings();
     screen.innerHTML='<header class="gp-header"><button type="button" class="gp-iconbtn" id="gp-settings-back" aria-label="'+L('На главный экран','Home')+'">'+I('fa-chevron-left')+'</button><h2>'+L('Настройки','Settings')+'</h2><span class="gp-settings-header-space"></span></header>'+
         '<div class="gp-phone-settings"><div class="gp-phone-settings-links">'+
@@ -28,5 +28,6 @@ export function renderPhoneSettings(screen,api){
     screen.querySelector('[data-settings-open="lock"]').onclick=api.lock;
     screen.querySelector('[data-settings-open="chats"]').onclick=api.chats;
     if(panel)screen.querySelector('.gp-phone-settings-mount').appendChild(panel);
+    const check=panel?.querySelector('#gp-set-narrator');if(check)check.checked=!!getMeta().narratorMode;
 }
 

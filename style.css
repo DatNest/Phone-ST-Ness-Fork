@@ -5687,3 +5687,23 @@ img[data-zoom] { cursor: zoom-in; }
     object-fit: contain;
     border-radius: 3px;
 }
+
+/* Ness narrator fork: editable stable account avatars */
+#gp-phone .gp-comment-avatar-button {background:transparent;border:0;padding:0;align-self:flex-start;flex:0 0 auto;cursor:pointer;border-radius:50%;position:relative}
+#gp-phone .gp-comment-avatar-button:focus-visible {outline:2px solid #d6b1e5;outline-offset:2px}
+#gp-phone .gp-comment-avatar-button::after {content:"✎";position:absolute;right:-3px;bottom:-3px;display:grid;place-items:center;width:13px;height:13px;font-size:9px;background:#f1d9f0;color:#665274;border:1px solid white;border-radius:50%;pointer-events:none}
+#gp-phone .gp-avatar-fallback-wrap {position:relative;display:flex;align-items:center;justify-content:center}
+#gp-phone .gp-avatar-fallback-wrap .gp-avatar-fallback {position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:inherit;font-weight:600;color:white;z-index:0}
+#gp-phone .gp-avatar-fallback-wrap img {position:relative;z-index:1;background:transparent}
+#gp-phone .gp-comment-avatar-picker {display:flex;flex-direction:column;gap:12px;padding:16px;color:var(--gp-text)}
+#gp-phone .gp-comment-avatar-picker p {margin:0;line-height:1.5;color:var(--gp-text-dim)}
+#gp-phone .gp-comment-avatar-preview {display:flex;justify-content:center;padding:4px}
+#gp-phone .gp-comment-avatar-preview .gp-avatar {width:76px;height:76px;font-size:34px}
+#gp-phone .gp-comment-avatar-picker label {display:flex;flex-direction:column;gap:6px;color:var(--gp-text)}
+#gp-phone .gp-comment-avatar-picker input[type=url] {width:100%;border-radius:12px;padding:10px;border:1px solid var(--gp-border-soft);background:var(--gp-glass-strong);color:var(--gp-text)}
+#gp-phone .gp-comment-avatar-file {padding:12px;border:1px dashed var(--gp-border-soft);border-radius:14px;cursor:pointer}
+#gp-phone .gp-comment-avatar-file input {max-width:100%;font-size:12px}
+#gp-phone .gp-comment-avatar-picker [data-avatar-error] {color:#c44a7c;min-height:1em}
+
+#gp-phone .gp-chan-senderline {display:flex;align-items:center;gap:8px;margin:0 0 5px}
+#gp-phone .gp-chan-comment-avatar .gp-avatar {width:26px;height:26px;font-size:12px}
