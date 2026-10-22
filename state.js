@@ -11,7 +11,7 @@ import { cleanContactName, contactNameKey, redirectedContactKey, resolveIdentity
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '2.54.0-ness.3';
+export const GP_VERSION = '2.55.0-ness.4';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -45,6 +45,7 @@ const defaultSettings = () => ({
     // 'rich' — карточка бота + персона + триггернутый лорбук + история чата (дефолт)
     // 'lite' — только короткий срез чата (максимальная изоляция)
     socialContextMode: 'rich',
+    socialPromptOverrides: {}, // editable/exportable phone social prompt pack
     // Спам/мошенники: редкие скам-смс с незнакомых номеров (кулдаун ~35 мин)
     scamEnabled: true,
     // Картинко-расширение: '' = АВТООПРЕДЕЛЕНИЕ (ищем среди установленных

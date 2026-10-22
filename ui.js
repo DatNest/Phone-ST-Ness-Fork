@@ -54,7 +54,8 @@ import {
     handleFor, setContactHandle, setUserHandle, getUserHandle, describePostImage, generatePrivateSmsReply, logSocialToChat, getSocialJournalEntries, logIgPost, logFeedDigest,
     settleSocialPost, maybeGenerateStoryEvent, resolveStoryEvent, generateAdvertisingOffers,
     getStories, activeStories, addStory, deleteStory, bumpStoryViews, toggleStoryLike, generateContactStories, generateStoryReactions,
-    commenterAvatarSrc, setCommenterAvatar, randomizeCommenterAvatar,
+    commenterAvatarSrc, setCommenterAvatar, randomizeCommenterAvatar, getSocialAccount, saveSocialAccount,
+    profileDisplayName, profileHandle, rememberSocialAccount,
     generateRepLabel, generateGroupChats,
     generateChannels, generateChannelPosts, generateChannelComments, generateMyChannelFeedback, generatePersonChannel,
     generateAnonFeed, generateAnonComments, resolveAnonAuthor, generateTinderDeck,
@@ -207,61 +208,83 @@ function avatarHtml(name, avatarUrl, cls = 'gp-avatar') {
 
 // Avatar overrides belong to a social account, not to an individual comment.
 // Reused in Twitter / Instagram / OF and survives chat reloads.
+// Shared editor for every online account: posts, comments and channel discussions.
+// A profile is stored per RP chat and does not imply friendship or phone access.
+function openSocialAccountProfile(item) {
+    if (!item || item.ak === 'user') return;
+    const screen=document.getElementById('gp-screen');
+    if(!screen)return;
+    const owner=getMeta();
+    const stillHere=()=>owner===getMeta();
+    const data=getSocialAccount(item)||{};
+    const safe=esc;
+    const display=data.displayName||item.author||'Аккаунт';
+    const initialHandle=(data.handle||item.handle||makeHandle(item.author||'')).replace(/^@/,'');
+    const source=data.kind==='cast'?'Персонаж ролевой':data.kind==='contact'?'Контакт':data.interactions?'Есть взаимодействия с игроком':'Аккаунт из соцсетей';
+    const sheet=openPhoneSheet(screen,'Профиль · '+display,`
+        <form class="gp-account-editor" data-account-form>
+            <div class="gp-account-head">
+                ${avatarHtml(item.author,commenterAvatarSrc(item),'gp-avatar')}
+                <div><b>${safe(display)}</b><small>${safe(source)} · появлений: ${Number(data.seen)||1}</small></div>
+            </div>
+            <label>Имя аккаунта<input class="text_pole" name="displayName" maxlength="70" value="${safe(display)}"></label>
+            <label>Ник (@)<input class="text_pole" name="handle" maxlength="40" value="${safe(initialHandle)}"></label>
+            <label>Описание профиля<textarea class="text_pole" name="bio" maxlength="500" rows="2" placeholder="Чем занимается, о чём пишет…">${safe(data.bio||'')}</textarea></label>
+            <label>Заметки для ИИ<textarea class="text_pole" name="notes" maxlength="1200" rows="3" placeholder="Установленные факты об этом аккаунте, круг общения, характер">${safe(data.notes||'')}</textarea></label>
+            <label class="gp-account-pin"><input type="checkbox" name="pinned" ${data.pinned?'checked':''}> Закрепить аккаунт: пусть возвращается в ленту, когда это уместно</label>
+            <button type="submit" class="gp-btn">Сохранить профиль</button>
+            <hr>
+            <div class="gp-comment-avatar-preview">${avatarHtml(item.author,commenterAvatarSrc(item),'gp-avatar')}</div>
+            <button type="button" class="gp-btn" data-avatar-random>👤 Другой случайный портрет из интернета</button>
+            <button type="button" class="gp-btn" data-avatar-photo>🖼 Случайная картинка из интернета</button>
+            <label>Загрузить своё изображение<input type="file" accept="image/*" data-avatar-file></label>
+            <label>Прямая HTTPS-ссылка<input class="text_pole" type="url" placeholder="https://…/avatar.png" data-avatar-link></label>
+            <button type="button" class="gp-btn" data-avatar-link-save>Использовать ссылку</button>
+            <button type="button" class="gp-btn" data-avatar-default>Сбросить аватар</button>
+            <small data-account-error aria-live="polite"></small>
+        </form>`,currentScreen);
+    const status=sheet.querySelector('[data-account-error]');
+    const finish=()=>{closePhoneSheet(sheet);if(stillHere())render();};
+    sheet.querySelector('[data-account-form]').onsubmit=e=>{
+        e.preventDefault();if(!stillHere())return;
+        const form=e.currentTarget;
+        saveSocialAccount(item,{
+            displayName:form.elements.displayName.value,
+            handle:form.elements.handle.value,
+            bio:form.elements.bio.value,
+            notes:form.elements.notes.value,
+            pinned:form.elements.pinned.checked,
+        });finish();
+    };
+    const updateAvatar=src=>{if(!stillHere())return;setCommenterAvatar(item,src);finish();};
+    sheet.querySelector('[data-avatar-random]').onclick=()=>{randomizeCommenterAvatar(item);finish();};
+    sheet.querySelector('[data-avatar-photo]').onclick=()=>{randomizeCommenterAvatar(item,'photo');finish();};
+    sheet.querySelector('[data-avatar-default]').onclick=()=>updateAvatar('');
+    sheet.querySelector('[data-avatar-link-save]').onclick=()=>{
+        const url=sheet.querySelector('[data-avatar-link]').value.trim();
+        if(!/^https:\/\/[^\s<>"']+$/i.test(url)){status.textContent='Нужна прямая HTTPS-ссылка на изображение.';return;}
+        updateAvatar(url);
+    };
+    sheet.querySelector('[data-avatar-file]').onchange=async e=>{
+        const f=e.target.files?.[0];if(!f)return;
+        if(!f.type.startsWith('image/')||f.size>15000000){status.textContent='Нужен файл изображения до 15 МБ.';return;}
+        status.textContent='Подготавливаю изображение…';
+        try{const src=await compressImage(f,320,.78);if(stillHere()&&sheet.isConnected)updateAvatar(src);}
+        catch(error){if(sheet.isConnected)status.textContent=String(error?.message||error);}
+    };
+}
 function bindCommentAvatarPicker(screen, comments) {
-    screen.querySelectorAll('[data-comment-avatar]').forEach(button => {
-        button.onclick = event => {
-            event.stopPropagation();
-            const comment = comments.find(item => String(item.id) === button.dataset.commentAvatar);
-            if (!comment || comment.ak === 'user') return;
-            const owner = getMeta();
-            const current = () => owner === getMeta();
-            const title = 'Аватар: ' + String(comment.author || 'Аккаунт');
-            const dialog = openPhoneSheet(screen, title, `
-                <div class="gp-comment-avatar-picker">
-                    <div class="gp-comment-avatar-preview">${avatarHtml(comment.author, commenterAvatarSrc(comment), 'gp-avatar')}</div>
-                    <p>Аватар сохраняется для этого автора и используется во всех его комментариях.</p>
-                    <button type="button" class="gp-btn gp-avatar-random" data-avatar-random>👤 Случайный портрет из интернета</button>
-                    <button type="button" class="gp-btn" data-avatar-photo>🖼 Случайная картинка из интернета</button>
-                    <label class="gp-comment-avatar-file">📁 Загрузить своё фото<input type="file" accept="image/*" data-avatar-file></label>
-                    <label>Ссылка на изображение (https://)<input type="url" placeholder="https://example.com/avatar.jpg" data-avatar-link></label>
-                    <button type="button" class="gp-btn" data-avatar-link-save>Сохранить ссылку</button>
-                    <button type="button" class="gp-btn" data-avatar-default>Вернуть стандартную аватарку</button>
-                    <small data-avatar-error></small>
-                </div>`, 'comment-avatar');
-            const status=dialog.querySelector('[data-avatar-error]');
-            const closeAndRefresh=()=>{closePhoneSheet(dialog);if(current())render();};
-            dialog.querySelector('[data-avatar-random]').onclick=()=>{
-                if (!current()) return;
-                randomizeCommenterAvatar(comment);closeAndRefresh();
-            };
-            dialog.querySelector('[data-avatar-photo]').onclick=()=>{
-                if (!current()) return;
-                randomizeCommenterAvatar(comment,'photo');closeAndRefresh();
-            };
-            dialog.querySelector('[data-avatar-default]').onclick=()=>{
-                if (!current()) return;
-                setCommenterAvatar(comment,'');closeAndRefresh();
-            };
-            dialog.querySelector('[data-avatar-link-save]').onclick=()=>{
-                if (!current()) return;
-                const url=dialog.querySelector('[data-avatar-link]').value.trim();
-                if(!/^https:\/\/[^\s<>"']+$/i.test(url)){
-                    status.textContent='Нужна прямая ссылка https:// на изображение.';return;
-                }
-                setCommenterAvatar(comment,url);closeAndRefresh();
-            };
-            dialog.querySelector('[data-avatar-file]').onchange=async event=>{
-                const file=event.target.files?.[0];if(!file)return;
-                if(!file.type.startsWith('image/')){status.textContent='Выбери файл изображения.';return;}
-                status.textContent='Обрабатываю изображение…';
-                try{
-                    const src=await compressImage(file,320,.8);
-                    if(!current()||!dialog.isConnected)return;
-                    setCommenterAvatar(comment,src);closeAndRefresh();
-                }catch(error){if(dialog.isConnected)status.textContent=String(error?.message||error);}
-            };
+    screen.querySelectorAll('[data-comment-avatar]').forEach(button=>{
+        button.onclick=e=>{
+            e.stopPropagation();
+            const item=comments.find(c=>String(c.id)===button.dataset.commentAvatar);
+            if(item)openSocialAccountProfile(item);
         };
     });
+}
+function socialAccountButton(item, cls='gp-avatar gp-avatar-sm'){
+    if(item.ak==='user')return avatarHtml(item.author,avatarForAuthor('user'),cls);
+    return `<button type="button" class="gp-account-trigger" data-account-open="1" data-account-name="${esc(item.author||'')}" data-account-ak="${esc(item.ak||'random')}" data-account-handle="${esc(item.handle||'')}" title="Профиль и аватар ${esc(item.author||'')}" aria-label="Открыть профиль ${esc(item.author||'')}">${avatarHtml(item.author,commenterAvatarSrc(item),cls)}</button>`;
 }
 
 function brand(name) { return `<i class="fa-brands ${name}"></i>`; }
@@ -489,6 +512,11 @@ function createPhone() {
     ov.querySelector('#gp-close')?.addEventListener('click', closePhone);
     ov.querySelector('#gp-quiet-indicator')?.addEventListener('click', () => goto('settings'));
     ov.querySelector('.gp-homebar')?.addEventListener('click', closePhone);
+    ov.querySelector('#gp-screen')?.addEventListener('click',event=>{
+        const button=event.target.closest('[data-account-open]');
+        if(!button)return;event.preventDefault();event.stopPropagation();
+        openSocialAccountProfile({author:button.dataset.accountName,ak:button.dataset.accountAk||'random',handle:button.dataset.accountHandle||''});
+    }, true); // capture before clickable tweet/card navigation handlers
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape' && isPhoneOpen()) closePhone();
     });
@@ -2649,7 +2677,7 @@ function dispHandle(item) {
     if (item.ak === 'user' || (typeof item.ak === 'string' && item.ak.startsWith('contact:'))) {
         return handleFor(item.ak, item.author);
     }
-    return item.handle || makeHandle(item.author);
+    return profileHandle(item);
 }
 
 function twCard(t, { clickable = true } = {}) {
@@ -2671,10 +2699,10 @@ function twCard(t, { clickable = true } = {}) {
 
     return `
     <div class="gp-tw-card${clickable ? ' gp-clickable' : ''}" data-tweet="${esc(t.id)}">
-        ${avatarHtml(t.author, avatarForAuthor(t.ak, t.author), 'gp-avatar gp-avatar-sm')}
+        ${socialAccountButton(t)}
         <div class="gp-tw-body">
             <div class="gp-tw-meta">
-                <span class="gp-tw-name">${esc(t.author)}</span>
+                <span class="gp-tw-name">${esc(profileDisplayName(t))}</span>
                 <span class="gp-tw-handle">${esc(dispHandle(t))}</span>
                 <span class="gp-tw-time">· ${esc(timeAgo(t.time))}</span>
                 ${isUser
@@ -2868,7 +2896,7 @@ function renderTwThread(screen) {
                         ${r.ak === 'user' ? avatarHtml(r.author, avatarForAuthor('user'), 'gp-avatar gp-avatar-xs') : `<button type="button" class="gp-comment-avatar-button" data-comment-avatar="${esc(r.id)}" title="Изменить аватар автора" aria-label="Изменить аватар ${esc(r.author)}">${avatarHtml(r.author, commenterAvatarSrc(r), 'gp-avatar gp-avatar-xs')}</button>`}
                         <div class="gp-reply-body">
                             <div class="gp-tw-meta">
-                                <span class="gp-tw-name">${esc(r.author)}</span>
+                                <span class="gp-tw-name">${esc(profileDisplayName(r))}</span>
                                 <span class="gp-tw-handle">${esc(dispHandle(r))}</span>
                                 <span class="gp-tw-time">· ${esc(timeAgo(r.time))}</span>
                                 <button class="gp-reply-btn" data-replyto-tw="${esc(r.id)}" title="Ответить">${ic('fa-reply')}</button>
@@ -3076,13 +3104,13 @@ function igImageHtml(p) {
 
 function igCard(p, { clickable = true } = {}) {
     const isUser = p.ak === 'user';
-    const handle = handleFor(p.ak, p.author);
+    const handle = profileHandle(p);
     return `
     <div class="gp-ig-card" data-post="${esc(p.id)}">
         <div class="gp-ig-head">
-            ${avatarHtml(p.author, avatarForAuthor(p.ak, p.author), 'gp-avatar gp-avatar-xs')}
+            ${socialAccountButton(p,'gp-avatar gp-avatar-xs')}
             <span class="gp-ig-nameblock">
-                <span class="gp-ig-name">${esc(p.author)}</span>
+                <span class="gp-ig-name">${esc(profileDisplayName(p))}</span>
                 <span class="gp-ig-handle">${esc(handle)}</span>
             </span>
             <span class="gp-tw-time">· ${esc(timeAgo(p.time))}</span>
@@ -3323,7 +3351,7 @@ function renderIgView(screen) {
                         ${c.ak === 'user' ? avatarHtml(c.author, avatarForAuthor('user'), 'gp-avatar gp-avatar-xs') : `<button type="button" class="gp-comment-avatar-button" data-comment-avatar="${esc(c.id)}" title="Изменить аватар автора" aria-label="Изменить аватар ${esc(c.author)}">${avatarHtml(c.author, commenterAvatarSrc(c), 'gp-avatar gp-avatar-xs')}</button>`}
                         <div class="gp-reply-body">
                             <div class="gp-tw-meta">
-                                <span class="gp-tw-name">${esc(c.author)}</span>
+                                <span class="gp-tw-name">${esc(profileDisplayName(c))}</span>
                                 <span class="gp-tw-time">· ${esc(timeAgo(c.time))}</span>
                                 <button class="gp-reply-btn" data-replyto-ig="${esc(c.id)}" title="Ответить">${ic('fa-reply')}</button>
                                 ${c.ak!=='user'?`<button type="button" class="gp-reply-btn" data-reroll-igcomment="${esc(c.id)}" aria-label="Переписать комментарий" title="Переписать комментарий" ${genBusy?'disabled':''}>${bankIcon('RotateCw')}</button>`:''}
@@ -3630,7 +3658,7 @@ function renderIgStory(screen) {
     const st = stories[_storyIdx];
     const isMine = st.ak === 'user';
     const authorName = isMine ? getUserName() : (st.author || '?');
-    const authorAva = avatarHtml(authorName, avatarForAuthor(isMine ? 'user' : st.ak, authorName), 'gp-avatar gp-avatar-sm');
+    const authorAva = socialAccountButton({author:authorName,ak:isMine?'user':st.ak},'gp-avatar gp-avatar-sm');
     const views = isMine ? bumpStoryViews(st) : 0;
     const ageMin = Math.max(1, Math.round((Date.now() - st.time) / 60000));
     const ageLabel = ageMin < 60 ? `${ageMin} м` : `${Math.round(ageMin / 60)} ч`;
@@ -3817,8 +3845,8 @@ function ofCard(p, { clickable = true } = {}) {
     return `
     <div class="gp-ig-card gp-of-card" data-post="${esc(p.id)}">
         <div class="gp-ig-head">
-            ${avatarHtml(p.author, avatarForAuthor(p.ak, p.author), 'gp-avatar gp-avatar-xs')}
-            <span class="gp-ig-name">${esc(p.author)}</span>
+            ${socialAccountButton(p,'gp-avatar gp-avatar-xs')}
+            <span class="gp-ig-name">${esc(profileDisplayName(p))}</span>
             <span class="gp-of-badge">${ic('fa-lock')}${p.price > 0 ? ` $${p.price}` : ' подписка'}</span>
             <span class="gp-tw-time">· ${esc(timeAgo(p.time))}</span>
             <button class="gp-tw-del" data-del-of="${esc(p.id)}" title="Удалить">${ic('fa-xmark')}</button>
@@ -3907,7 +3935,7 @@ function renderOfView(screen) {
                         ${c.ak === 'user' ? avatarHtml(c.author, avatarForAuthor('user'), 'gp-avatar gp-avatar-xs') : `<button type="button" class="gp-comment-avatar-button" data-comment-avatar="${esc(c.id)}" title="Изменить аватар автора" aria-label="Изменить аватар ${esc(c.author)}">${avatarHtml(c.author, commenterAvatarSrc(c), 'gp-avatar gp-avatar-xs')}</button>`}
                         <div class="gp-reply-body">
                             <div class="gp-tw-meta">
-                                <span class="gp-tw-name">${esc(c.author)}</span>
+                                <span class="gp-tw-name">${esc(profileDisplayName(c))}</span>
                                 ${c.tip ? `<span class="gp-of-tip-badge">${ic('fa-sack-dollar')} $${c.tip}</span>` : ''}
                                 <span class="gp-tw-time">· ${esc(timeAgo(c.time))}</span>
                                 <button class="gp-reply-del" data-del-ofcomment="${esc(c.id)}" title="Удалить">${ic('fa-xmark')}</button>
@@ -6435,7 +6463,7 @@ function renderChanPost(screen) {
         const quoted = quotedFor(all, ci, c.replyTo);
         // Содержимое пузыря склеиваем без переносов: у .gp-bubble white-space
         // pre-wrap, и отступы разметки превратились бы в пустые строки в тексте
-        const sender = mine ? '' : `<div class="gp-bubble-sender gp-chan-senderline" style="color:${senderColor(c.author)}"><button type="button" class="gp-comment-avatar-button gp-chan-comment-avatar" data-comment-avatar="${esc(c.id)}" title="Изменить аватар автора" aria-label="Изменить аватар ${esc(c.author)}">${avatarHtml(c.author, commenterAvatarSrc(c), 'gp-avatar gp-avatar-xs')}</button><span>${esc(c.author)}${c.handle ? ` <i>${esc(c.handle)}</i>` : ''}</span></div>`;
+        const sender = mine ? '' : `<div class="gp-bubble-sender gp-chan-senderline" style="color:${senderColor(c.author)}"><button type="button" class="gp-comment-avatar-button gp-chan-comment-avatar" data-comment-avatar="${esc(c.id)}" title="Изменить аватар автора" aria-label="Изменить аватар ${esc(c.author)}">${avatarHtml(c.author, commenterAvatarSrc(c), 'gp-avatar gp-avatar-xs')}</button><span>${esc(profileDisplayName(c))}${c.handle ? ` <i>${esc(profileHandle(c))}</i>` : ''}</span></div>`;
         const quote = c.replyTo
             ? `<div class="gp-chan-quote"><b>${esc(c.replyTo)}</b><span>${esc(String(quoted?.text || 'комментарий').slice(0, 70))}</span></div>`
             : '';

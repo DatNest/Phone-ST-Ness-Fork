@@ -5707,3 +5707,21 @@ img[data-zoom] { cursor: zoom-in; }
 
 #gp-phone .gp-chan-senderline {display:flex;align-items:center;gap:8px;margin:0 0 5px}
 #gp-phone .gp-chan-comment-avatar .gp-avatar {width:26px;height:26px;font-size:12px}
+
+/* Ness 2.55: tap/click a social account avatar to edit a persistent profile. */
+#gp-phone .gp-account-trigger{border:0;background:transparent;padding:0;cursor:pointer;flex:0 0 auto;display:inline-flex;align-items:flex-start;align-self:flex-start;border-radius:50%;position:relative;}
+#gp-phone .gp-account-trigger:focus-visible{outline:2px solid var(--gp-accent-a,#cc9ed6);outline-offset:2px}
+#gp-phone .gp-account-trigger::after{content:"✎";font-size:9px;position:absolute;bottom:-3px;right:-3px;background:#f2dff3;border-radius:50%;border:1px solid white;color:#675575;width:13px;height:13px;display:grid;place-items:center;pointer-events:none}
+#gp-phone .gp-account-editor{display:flex;flex-direction:column;gap:10px;padding:15px;max-height:70vh;overflow-y:auto;color:var(--gp-text);}
+#gp-phone .gp-account-editor label{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--gp-text);}
+#gp-phone .gp-account-editor label.gp-account-pin{flex-direction:row;align-items:center;gap:8px;line-height:1.4}
+#gp-phone .gp-account-editor input:not([type="checkbox"]):not([type="file"]),#gp-phone .gp-account-editor textarea{width:100%;min-width:0;box-sizing:border-box;border-radius:10px;padding:9px;font:inherit;resize:vertical}
+#gp-phone .gp-account-editor [data-account-error]{color:#c44a7c;min-height:1em}
+#gp-phone .gp-account-head{display:flex;align-items:center;gap:12px}
+#gp-phone .gp-account-head .gp-avatar{width:53px;height:53px;font-size:24px;flex:0 0 53px}
+#gp-phone .gp-account-head>div:last-child{display:flex;flex-direction:column;gap:4px;min-width:0}
+#gp-phone .gp-account-head small{color:var(--gp-text-dim)}
+#gp-phone .gp-account-editor hr{border:0;border-top:1px solid var(--gp-border-soft);width:100%;margin:4px 0}
+#gp-settings-drawer #gp-social-prompt-editor textarea{min-height:95px;max-height:400px;width:100%;font-size:12px;line-height:1.5;resize:vertical}
+#gp-settings-drawer .gp-social-prompt-actions{flex-wrap:wrap;gap:6px}
+#gp-settings-drawer .gp-prompt-import-button{cursor:pointer;display:inline-flex;align-items:center}

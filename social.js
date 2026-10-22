@@ -20,6 +20,7 @@ import { getBank, addTransaction, privateBankPrompt } from './bank.js';
 import { logReq, logOk, logFail } from './debug-log.js';
 import { addIgActivity } from './instagram-state.js';
 import { narratorMode, narratorGuidance, roleplayCast } from './narrator-context.js';
+import { socialPromptExtras } from './social-prompt-overrides.js';
 
 function requirePhoneApp(app) {
     if (!isPhoneAppInstalled(app)) throw Object.assign(new Error('Приложение удалено. Его можно установить в App Store.'), { name: 'AbortError' });
@@ -51,6 +52,31 @@ export function getSocial() {
     if (typeof s.ofEarned !== 'number') s.ofEarned = 0;
     if (typeof s.ofWallet !== 'number') s.ofWallet = 0; // прежний кошелёк: один раз переезжает в банк (migrateOfWallet)
     if (!Array.isArray(s.seenTags)) s.seenTags = [];
+    if (!s.accountProfiles || typeof s.accountProfiles !== 'object' || Array.isArray(s.accountProfiles)) s.accountProfiles = {};
+    if (!s.accountAvatars || typeof s.accountAvatars !== 'object' || Array.isArray(s.accountAvatars)) s.accountAvatars = {};
+    // One-time migration of older feed entries into durable account memory.
+    if(!s.accountProfilesMigrated){
+        const ingest=(item,interaction=false)=>{
+            if(!item||!item.author||item.ak==='user'||isUserName(item.author))return;
+            const ak=String(item.ak||'');
+            const id=ak.startsWith('contact:')||ak.startsWith('cast:')?ak:'social:'+keyOf(item.author);
+            if(!id||id==='social:')return;
+            const prof=s.accountProfiles[id]||{originalName:String(item.author).slice(0,70),displayName:'',handle:'',bio:'',notes:'',seen:0,interactions:0,pinned:false,kind:'random'};
+            prof.seen+=1;
+            if(interaction)prof.interactions+=1;
+            if(item.handle&&!prof.originalHandle)prof.originalHandle=String(item.handle).slice(0,60);
+            if(ak.startsWith('contact:'))prof.kind='contact';
+            if(ak.startsWith('cast:'))prof.kind='cast';
+            if(interaction||prof.kind!=='random')prof.pinned=true;
+            s.accountProfiles[id]=prof;
+        };
+        for(const item of [...s.tweets,...s.igPosts,...s.ofPosts]){
+            ingest(item);
+            for(const reply of (item.replies||item.comments||[]))ingest(reply,item.ak==='user');
+        }
+        s.accountProfilesMigrated=true;
+    }
+
     ensureSocialSystems(s);
     return s;
 }
@@ -168,6 +194,7 @@ Format: [{"author":"Имя","photo":"...","caption":"..."}]`;
         added++;
     }
     s.stories = s.stories.slice(0, 30);
+    for(const story of s.stories.filter(x=>x.ak!=='user').slice(0,added))rememberSocialAccount(story,{source:'instagram-story'});
     saveMeta();
     return added;
 }
@@ -254,6 +281,8 @@ export function handleFor(ak, name) {
     if (ak === 'user') {
         return m.userHandle || makeHandle(getUserName());
     }
+    const existing=getSocialAccount({ak,author:name});
+    if(existing?.handle)return '@'+existing.handle.replace(/^@/,'');
     if (typeof ak === 'string' && ak.startsWith('contact:')) {
         const custom = m.handles[resolveContactKey(ak.slice(8))];
         if (custom) return custom.startsWith('@') ? custom : '@' + custom;
@@ -472,6 +501,7 @@ export function likeTweet(id) {
     if (!t) return;
     t.liked = !t.liked;
     t.likes = Math.max(0, (t.likes || 0) + (t.liked ? 1 : -1));
+    if(t.liked&&t.ak!=='user')rememberSocialAccount(t,{interaction:true,source:'liked-twitter'});
     saveMeta();
 }
 
@@ -500,6 +530,8 @@ export function addTweetReply(tweetId, text, author = null, ak = 'user', replyTo
     };
     if (replyTo) r.replyTo = { id: replyTo.id, author: replyTo.author };
     t.replies.push(r);
+    if(ak==='user'){if(t.ak!=='user')rememberSocialAccount(t,{interaction:true,source:'twitter-replied-to'});if(replyTo&&replyTo.ak!=='user')rememberSocialAccount({...replyTo,ak:replyTo.ak||resolveAuthorKey(replyTo.author)},{interaction:true,source:'twitter-reply'});}
+    else rememberSocialAccount(r,{interaction:t.ak==='user',source:'twitter'});
     if (t.replies.length > MAX_COMMENTS) t.replies = t.replies.slice(-MAX_COMMENTS);
     saveMeta();
     return r;
@@ -545,6 +577,7 @@ export function likeIg(id) {
     if (!p) return;
     p.liked = !p.liked;
     p.likes = Math.max(0, (p.likes || 0) + (p.liked ? 1 : -1));
+    if(p.liked&&p.ak!=='user')rememberSocialAccount(p,{interaction:true,source:'liked-instagram'});
     saveMeta();
 }
 
@@ -566,6 +599,8 @@ export function addIgComment(postId, text, author = null, ak = 'user', replyTo =
     };
     if (replyTo) c.replyTo = { id: replyTo.id, author: replyTo.author };
     p.comments.push(c);
+    if(ak==='user'){if(p.ak!=='user')rememberSocialAccount(p,{interaction:true,source:'instagram-replied-to'});if(replyTo&&replyTo.ak!=='user')rememberSocialAccount({...replyTo,ak:replyTo.ak||resolveAuthorKey(replyTo.author)},{interaction:true,source:'instagram-reply'});}
+    else rememberSocialAccount(c,{interaction:p.ak==='user',source:'instagram'});
     if((p.ak==='user'||replyTo&&isUserName(replyTo.author))&&ak!=='user'&&!isUserName(c.author))addIgActivity({kind:'comment',author:c.author,ak:c.ak,target:'post',targetId:p.id,text:c.text,dedupe:'comment:'+c.id});
     if (p.comments.length > MAX_IG_COMMENTS) p.comments = p.comments.slice(-MAX_IG_COMMENTS);
     saveMeta();
@@ -711,7 +746,7 @@ ${wantDesc
         ? `Format — STRICT JSON OBJECT: {"photo_description":"visible subjects and details, one concise paragraph","comments":[{"author":"ник","text":"...","type":"random","tip":0},...]}`
         : `Format: [{"author":"ник","text":"...","type":"random","tip":0},...]`}`;
 
-    const rawOf = await socialGen(prompt, { app: 'of',
+    const rawOf = await socialGen(prompt+'\nSOCIAL WRITING EDITOR RULES:\n'+socialPromptExtras(getSettings(),'other'), { app: 'of',
         maxTokens: wantDesc ? 2048 : 1536,
         image: willAttach ? post.image : null,
         prefill: wantDesc ? '{"photo_description":"' : '[{"author":"',
@@ -1521,7 +1556,7 @@ function contactsBlock() {
         lines.push(`- ${mc} (${handleFor(`contact:${keyOf(mc)}`, mc)})`);
     }
     const userLine = `${getUserName()}'s own handle: ${getUserHandle()}`;
-    return (lines.length ? `Known characters (contacts in ${getUserName()}'s phone), use EXACTLY these handles for them:\n${lines.join('\n')}` : '(no known contacts yet)') + `\n${userLine}`;
+    return (lines.length ? `${narratorMode()?'Known world characters (NOT all contacts or friends)':'Known characters / phone contacts'}; preserve handles and canon, choose only those relevant:\n${lines.join('\n')}` : '(no known contacts yet)') + `\n${userLine}`;
 }
 
 // ── Богатый контекст: карточка персонажа + персона + триггернутый лорбук ──
@@ -1600,6 +1635,8 @@ async function taskHeader(what, { publicOnly = false, contactNames = [], brief =
         if (context.wi) blocks.push('WORLD / LOREBOOK:\n' + context.wi);
     }
     if (narratorMode()) blocks.push(narratorGuidance({ publicOnly }));
+    const recurring = recurringSocialAccounts();
+    if(recurring) blocks.push('ESTABLISHED SOCIAL ACCOUNTS (reuse selectively, NEVER create a contact or secret knowledge just because listed):\n'+recurring+'\nCarry their identity, stable handle and established personality across appearances. Favor pinned accounts when relevant, but still include some fresh strangers.');
     const history = rpContextBlock(brief ? 3 : rich ? 24 : 12, { publicOnly });
     if (history) blocks.push('RECENT STORY:\n' + history);
     const clock = getRpDateTime();
@@ -1698,18 +1735,18 @@ export async function generateTweetFeed() {
     const prompt = `${await taskHeader(`generate tweets for the Twitter-like feed on ${getUserName()}'s phone.`)}
 ${contactsBlock()}
 ${userTweetsBlock}
-Generate 8-12 tweets for ${getUserName()}'s timeline:
+Generate 8-12 tweets for ${getUserName()}'s timeline. Usually reuse 3-5 established social accounts from the supplied registry when they plausibly would post; other posts come from new local accounts:
 1. Tweets from known characters — in character, may reference recent RP events (from their point of view, no spoilers of hidden thoughts).
 2. Tweets from invented accounts fitting the setting: news, local spots, memes, random strangers, drama. These make the feed feel alive.
 3. 1-2 tweets MAY be quote-retweets of ${getUserName()}'s recent tweets (if they posted any) — a character reacts to their tweet with their own commentary. For these, add a "quote" field.
 
-Rules: max 280 chars each, SHORT like real tweets; mix of tones (news, shitpost, life update, ad, hot take). NO emojis.
+Rules: max 280 characters each; vary length from three-word observations to short paragraphs. Mix ordinary details, funny mistakes, hobby updates, local news and occasional consequential story events. Distinct independent voices. Avoid repetitive moralizing, broad slogans and surreal metaphors disconnected from the setting. NO emojis.
 ${uiLangLine()}
 ${JSON_RULES}
 Format: [{"author":"Имя","handle":"@handle","text":"...","type":"contact|random"},...]  
 For quote-retweets: {"author":"...","handle":"...","text":"their commentary","type":"contact|random","quote":{"author":"${getUserName()}","text":"original tweet text"}}`;
 
-    const parsed = await socialGenArray(prompt, { app: 'tw', maxTokens: 2048, prefill: '[{"author":"' });
+    const parsed = await socialGenArray(prompt+'\nSOCIAL WRITING EDITOR RULES:\n'+socialPromptExtras(getSettings(),'twitterFeed'), { app: 'tw', maxTokens: 2048, prefill: '[{"author":"' });
     if (!Array.isArray(parsed) || parsed.length === 0) return 0;
 
     let added = 0;
@@ -1734,6 +1771,7 @@ For quote-retweets: {"author":"...","handle":"...","text":"their commentary","ty
             };
         }
         s.tweets.unshift(tw);
+        rememberSocialAccount(tw,{source:'twitter'});
         added++;
     }
     s.tweets.sort((a, b) => b.time - a.time);
@@ -1750,12 +1788,12 @@ ${tweet.advertisement ? `This is a PAID AD for ${tweet.advertisement.brand} (${t
 ${existing ? `Existing replies (do not repeat):\n${existing}\n` : ''}
 ${contactsBlock()}
 
-Generate 4-7 replies: known characters in-character when relevant + random accounts (fans, haters, reply guys, bots). NEVER write a reply as ${getUserName()} or from their account/handle; the user writes only by pressing Send. Realistic engagement — some agree, some argue, some joke. Max 280 chars each. NO emojis. Add sentiment="positive|neutral|negative" to every reply.
+Generate 4-7 believable replies: 1-2 canon/recurring authors only if they would see and care about the tweet, otherwise ordinary recurring or new users. Replies MUST engage with specific claims, not rephrase the original post. Vary length: short questions, disagreement, offhand jokes and occasional longer practical replies. NEVER write as ${getUserName()} or from their account/handle; user writes only by pressing Send. Max 280 chars each. NO emojis. Add sentiment="positive|neutral|negative" to every reply.
 ${uiLangLine()}
 ${JSON_RULES}
 Format: [{"author":"Имя","handle":"@handle","text":"...","type":"contact|random","sentiment":"positive|neutral|negative"},...]`;
 
-    const parsed = await socialGenArray(prompt, { app: 'tw', maxTokens: 1536, prefill: '[{"author":"' });
+    const parsed = await socialGenArray(prompt+'\nSOCIAL WRITING EDITOR RULES:\n'+socialPromptExtras(getSettings(),'twitterComments'), { app: 'tw', maxTokens: 1536, prefill: '[{"author":"' });
     if (!Array.isArray(parsed)) return 0;
     let added = 0;
     if (!Array.isArray(tweet.replies)) tweet.replies = [];
@@ -1770,6 +1808,7 @@ Format: [{"author":"Имя","handle":"@handle","text":"...","type":"contact|rand
             ak: it.type === 'contact' ? resolveAuthorKey(it.author) : (narratorMode() && resolveAuthorKey(it.author).startsWith('cast:') ? resolveAuthorKey(it.author) : 'random'),
             text: String(it.text).slice(0, 280), sentiment: ['positive','neutral','negative'].includes(it.sentiment) ? it.sentiment : 'neutral', time: Date.now() - Math.floor(Math.random() * 900000),
         });
+        rememberSocialAccount(tweet.replies.at(-1),{source:'twitter-reply',interaction:tweet.ak==='user'});
         added++;
     }
     tweet.likes = Math.max(tweet.likes || 0, Math.floor(Math.random() * 25) + tweet.replies.length * 2);
@@ -1836,7 +1875,7 @@ export async function generateIgFeed() {
     const prompt = `${await taskHeader(`generate posts for the Instagram-like feed on ${getUserName()}'s phone.`)}
 ${contactsBlock()}
 
-Generate 5-8 Instagram posts:
+Generate 5-8 Instagram posts. Reuse 1-3 established accounts from the supplied registry if contextually appropriate, while adding fresh authentic accounts:
 1. Posts from known characters — in character (their aesthetic, their life).
 2. Posts from invented accounts fitting the setting (places, food, aesthetics, memes). These are STRANGERS unrelated to ${getUserName()} — their photos must NOT feature ${getUserName()} or the main story characters.
 
@@ -1845,7 +1884,7 @@ ${uiLangLine()}
 ${JSON_RULES}
 Format: [{"author":"Имя","photo":"описание кадра","caption":"...","type":"contact|random"},...]`;
 
-    const parsed = await socialGenArray(prompt, { app: 'ig', maxTokens: 2048, prefill: '[{"author":"' });
+    const parsed = await socialGenArray(prompt+'\nSOCIAL WRITING EDITOR RULES:\n'+socialPromptExtras(getSettings(),'instagramFeed'), { app: 'ig', maxTokens: 2048, prefill: '[{"author":"' });
     if (!Array.isArray(parsed) || parsed.length === 0) return 0;
 
     const s = getSocial();
@@ -1862,6 +1901,7 @@ Format: [{"author":"Имя","photo":"описание кадра","caption":"...
             time: Date.now() - Math.floor(Math.random() * 7200000),
             likes: Math.floor(Math.random() * 120) + 3, liked: false, comments: [],
         });
+        rememberSocialAccount(s.igPosts[0],{source:'instagram'});
         added++;
     }
     s.igPosts.sort((a, b) => b.time - a.time);
@@ -1910,7 +1950,7 @@ ${existing.length ? `Channels they already see (do NOT duplicate): ${existing.jo
 ${uiLangLine()}
 ${JSON_RULES}
 Format: [{"name":"...","desc":"...","author":"...","subs":8900,"posts":[{"text":"...","photo":""}]}]`;
-    return await socialGenArray(prompt, { app: 'chans', maxTokens: 2400, prefill: '[{"name":"' });
+    return await socialGenArray(prompt+'\nSOCIAL WRITING EDITOR RULES:\n'+socialPromptExtras(getSettings(),'channels'), { app: 'chans', maxTokens: 2400, prefill: '[{"name":"' });
 }
 
 // Личный канал знакомого: не новостная лента, а его собственный блог
@@ -1922,7 +1962,7 @@ Give it: "name" — how they themselves called the channel (their wording: a nic
 ${uiLangLine()}
 ${JSON_RULES}
 Format: [{"name":"...","desc":"...","subs":320,"posts":[{"text":"...","photo":""}]}]`;
-    const arr = await socialGenArray(prompt, { app: 'chans', maxTokens: 1400, prefill: '[{"name":"' });
+    const arr = await socialGenArray(prompt+'\nSOCIAL WRITING EDITOR RULES:\n'+socialPromptExtras(getSettings(),'channels'), { app: 'chans', maxTokens: 1400, prefill: '[{"name":"' });
     return Array.isArray(arr) ? arr[0] : null;
 }
 
@@ -1935,7 +1975,7 @@ Write 2-4 new posts as this channel would publish them right now — tied to the
 ${uiLangLine()}
 ${JSON_RULES}
 Format: [{"text":"...","photo":""}]`;
-    return await socialGenArray(prompt, { app: 'chans', maxTokens: 1200, prefill: '[{"text":"' });
+    return await socialGenArray(prompt+'\nSOCIAL WRITING EDITOR RULES:\n'+socialPromptExtras(getSettings(),'channels'), { app: 'chans', maxTokens: 1200, prefill: '[{"text":"' });
 }
 
 // Лента анонимки: сплетни города + вопросы лично ей. Настоящий автор ("from")
@@ -2049,7 +2089,7 @@ Write ${userComment ? '2-3' : '3-5'} comments from subscribers: known characters
 ${uiLangLine()}
 ${JSON_RULES}
 Format: [{"author":"Имя","handle":"@nick","text":"...","reply_to":""}]`;
-    return await socialGenArray(prompt, { app: 'chans', maxTokens: 1200, prefill: '[{"author":"' });
+    return await socialGenArray(prompt+'\nSOCIAL WRITING EDITOR RULES:\n'+socialPromptExtras(getSettings(),'channels'), { app: 'chans', maxTokens: 1200, prefill: '[{"author":"' });
 }
 
 // Свой пост: реакции, комменты, личные сообщения и прирост подписчиков —
@@ -2069,7 +2109,7 @@ ${post.commentsOn ? '"comments" — 2-4 comments under the post (known character
 ${uiLangLine()}
 ${JSON_RULES}
 Format: [{${wantDesc ? '"photo":"...",' : ''}"reactions":[{"emoji":"🔥","n":24}],"comments":[{"author":"Имя","handle":"@nick","text":"...","reply_to":""}],"dms":[{"from":"Имя","text":"..."}],"new_subs":12}]`;
-    const arr = await socialGenArray(prompt, { app: 'chans',
+    const arr = await socialGenArray(prompt+'\nSOCIAL WRITING EDITOR RULES:\n'+socialPromptExtras(getSettings(),'channels'), { app: 'chans',
         maxTokens: 1800,
         image: post.image || null,
         prefill: wantDesc ? '[{"photo":"' : '[{"reactions":',
@@ -2343,7 +2383,7 @@ ${uiLangLine()}
 ${JSON_RULES}
 ${formatLine}`;
 
-    const raw = await socialGen(prompt, { app: 'ig',
+    const raw = await socialGen(prompt+'\nSOCIAL WRITING EDITOR RULES:\n'+socialPromptExtras(getSettings(),'instagramComments'), { app: 'ig',
         maxTokens: wantDesc ? 2600 : 2200,
         image: willAttach ? post.image : null,
         prefill: wantDesc ? '{"photo_description":"' : '[{"author":"',
@@ -2377,6 +2417,7 @@ ${formatLine}`;
             text: String(it.text).slice(0, 4000), sentiment: ['positive','neutral','negative'].includes(it.sentiment) ? it.sentiment : 'neutral', time: Date.now() - Math.floor(Math.random() * 600000),
         };
         post.comments.push(comment);
+        rememberSocialAccount(comment,{source:'instagram-comment',interaction:post.ak==='user'});
         if(post.ak==='user')addIgActivity({kind:'comment',author:comment.author,ak:comment.ak,target:'post',targetId:post.id,text:comment.text,dedupe:'comment:'+comment.id});
         added++;
     }
@@ -2596,28 +2637,81 @@ export function getContactAvatar(key) {
 // Аватар по имени автора (для лент)
 export function avatarForAuthor(ak, name = '') {
     if (ak === 'user') return userAvatarUrl();
-    if (typeof ak === 'string' && ak.startsWith('contact:')) {
-        return getContactAvatar(ak.slice(8));
-    }
-    if (name && (ak === 'random' || typeof ak === 'string' && ak.startsWith('cast:'))) {
-        return commenterAvatarSrc({ak, author:name});
-    }
+    if (name) return commenterAvatarSrc({ak, author:name});
+    if (typeof ak === 'string' && ak.startsWith('contact:')) return getContactAvatar(ak.slice(8));
     return '';
+}
+
+// Stable social identities are NOT phone contacts and grant no private access.
+// Name anchors work across X/Instagram/channel comments even when a generator
+// changes the handle slightly. Users can pin and edit these profiles.
+export function socialAccountKey(item) {
+    if (!item || item.ak === 'user' || isUserAuthor(item.author) || isUserAuthor(item.handle)) return '';
+    if (typeof item.ak === 'string' && (item.ak.startsWith('contact:') || item.ak.startsWith('cast:'))) return item.ak;
+    const author=keyOf(item.author || '');
+    return author ? 'social:' + author : '';
+}
+export function getSocialAccount(item){
+    const k=socialAccountKey(item);
+    return (k && getSocial().accountProfiles[k]) || null;
+}
+export function profileDisplayName(item){
+    return getSocialAccount(item)?.displayName || String(item?.author || '');
+}
+export function profileHandle(item){
+    const profile=getSocialAccount(item);
+    if(profile?.handle)return '@'+String(profile.handle).replace(/^@/,'');
+    return item?.handle || handleFor(item?.ak,item?.author);
+}
+export function rememberSocialAccount(item,{interaction=false,source='feed'}={}){
+    const key=socialAccountKey(item);
+    if(!key)return null;
+    const s=getSocial(),p=s.accountProfiles[key]||{
+        originalName:String(item.author || '').slice(0,70), displayName:'',
+        handle:'', bio:'', notes:'', seen:0, interactions:0, pinned:false, kind:'random'
+    };
+    p.seen=Math.min(99999,(Number(p.seen)||0)+1);
+    if(interaction)p.interactions=Math.min(9999,(Number(p.interactions)||0)+1);
+    if(item.handle&&!p.originalHandle)p.originalHandle=String(item.handle).slice(0,60);
+    if(typeof item.ak==='string'&&item.ak.startsWith('contact:'))p.kind='contact';
+    else if(typeof item.ak==='string'&&item.ak.startsWith('cast:'))p.kind='cast';
+    if(p.kind!=='random'||interaction)p.pinned=true;
+    if(!p.source)p.source=source;
+    s.accountProfiles[key]=p;
+    return p;
+}
+export function saveSocialAccount(item,changes){
+    const key=socialAccountKey(item);if(!key)return false;
+    const p=rememberSocialAccount(item)||{};
+    const clean=v=>String(v??'').trim();
+    p.displayName=clean(changes.displayName).slice(0,70);
+    p.handle=clean(changes.handle).replace(/^@+/,'').replace(/[^\p{L}\p{N}_.]/gu,'').slice(0,40);
+    p.bio=clean(changes.bio).slice(0,500);
+    p.notes=clean(changes.notes).slice(0,1200);
+    p.pinned=!!changes.pinned;
+    getSocial().accountProfiles[key]=p;saveMeta();return true;
+}
+function recurringSocialAccounts(){
+    const entries=Object.entries(getSocial().accountProfiles||{}).filter(([key,p])=>
+        p && (p.pinned||p.interactions>0||p.seen>=2) &&
+        !isUserAuthor(p.originalName) && !isBanned(p.originalName));
+    return entries.sort((a,b)=>(Number(b[1].interactions)||0)-(Number(a[1].interactions)||0) ||
+        Number(b[1].pinned)-Number(a[1].pinned) || Number(b[1].seen)-Number(a[1].seen))
+        .slice(0,24).map(([key,p])=>{
+            const handle=p.handle||String(p.originalHandle||'').replace(/^@/,'');
+            return '- '+(p.displayName||p.originalName)+(handle?' @'+handle:'')+
+                ' [identity='+key+', '+p.kind+(p.pinned?', recurring':'')+']'+
+                (p.bio?' Bio: '+p.bio:'')+(p.notes?' Private editor notes (DO NOT reveal anything not publicly known): '+p.notes:'');
+        }).join('\n');
 }
 
 // Profile images for comment authors: persistent per-account overrides.
 // Remote default: i.pravatar.cc is an external, optional image service; offline
 // or blocked networks fall back to initials on the UI.
 function commenterAccountKey(comment) {
-    if (!comment || comment.ak === 'user' || isUserAuthor(comment.author) || isUserAuthor(comment.handle)) return '';
-    // A contact/cast account has the same stable identity across platforms.
-    if (typeof comment.ak === 'string' && comment.ak.startsWith('contact:')) return comment.ak;
-    if (typeof comment.ak === 'string' && comment.ak.startsWith('cast:')) return comment.ak;
-    const handle = stripHandle(comment.handle || '').trim();
-    const author = String(comment.author || '').trim();
-    const isCustomHandle=handle && keyOf(handle) !== keyOf(stripHandle(makeHandle(author)));
-    return 'social:' + keyOf(isCustomHandle ? handle : (author || handle || 'anonymous'));
+    return socialAccountKey(comment);
 }
+
 function portraitForKey(key, salt = 0) {
     let hash = 2166136261;
     for(const ch of String(key)) hash = Math.imul(hash ^ ch.charCodeAt(0), 16777619);
@@ -2628,9 +2722,13 @@ export function commenterAvatarSrc(comment) {
     if (!comment) return '';
     if (comment.ak === 'user') return avatarForAuthor('user');
     const key = commenterAccountKey(comment);
-    const saved = key && getSocial().accountAvatars?.[key];
+    const social=getSocial();
+    const saved = key && social.accountAvatars?.[key];
     if(saved?.url) return saved.url;
-    const canonical = typeof comment.ak === 'string' && comment.ak.startsWith('contact:') ? avatarForAuthor(comment.ak) : '';
+    const legacyHandle=stripHandle(comment.handle||'');
+    const prevKey=legacyHandle&&'social:'+keyOf(legacyHandle);
+    if(prevKey&&prevKey!==key&&social.accountAvatars?.[prevKey]?.url)return social.accountAvatars[prevKey].url;
+    const canonical = typeof comment.ak === 'string' && comment.ak.startsWith('contact:') ? getContactAvatar(comment.ak.slice(8)) : '';
     if(canonical) return canonical;
     if(comment.avatar) return comment.avatar; // migrated legacy per-comment avatar
     return key ? portraitForKey(key) : '';

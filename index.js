@@ -19,6 +19,7 @@ import { trDom } from './i18n.js';
 import { buildReport, clearLog } from './debug-log.js';
 import { listPhoneImageBlocks } from './external-image-blocks.js';
 import { roleplayCast } from './narrator-context.js';
+import { PHONE_SOCIAL_PROMPT_DEFAULTS, normalizedSocialPrompts } from './social-prompt-overrides.js';
 
 // ── CSS ──
 const cssId = 'glassphone-css';
@@ -74,6 +75,26 @@ function setupSettingsPanel() {
                     <label><input type="checkbox" id="gp-set-anon" ${s.anonChannel !== false ? 'checked' : ''}><span>Анонимка «Подслушано» в каналах</span></label>
                     <label><input type="checkbox" id="gp-set-prefill" ${s.usePrefill ? 'checked' : ''}><span>Префилл ответа</span></label>
                     <label><input type="checkbox" id="gp-set-figspaces" ${s.useFigureSpaces ? 'checked' : ''}><span>Фигурные пробелы в ответе</span></label>
+                </div>
+            </div>
+        </details>
+
+        <details class="gp-settings-group" id="gp-social-prompt-editor">
+            <summary><i class="fa-solid fa-pen-to-square"></i><span><b>Редактор промптов соцсетей</b><small>Правки без редактирования форка · экспорт / импорт JSON</small></span><i class="fa-solid fa-chevron-down gp-settings-chevron"></i></summary>
+            <div class="gp-settings-group-body gp-settings-grid">
+                <p class="gp-settings-wide">Эти правила дополняют технический промпт, не заменяя проверку автора и формат JSON. Можно менять здесь или экспортировать файл, отредактировать в любом текстовом редакторе и импортировать обратно.</p>
+                <label class="gp-settings-field gp-settings-wide"><span>Как пишут люди вообще</span><textarea data-social-prompt="global" class="text_pole" rows="5" spellcheck="false"></textarea></label>
+                <label class="gp-settings-field gp-settings-wide"><span>X — лента постов</span><textarea data-social-prompt="twitterFeed" class="text_pole" rows="5" spellcheck="false"></textarea></label>
+                <label class="gp-settings-field gp-settings-wide"><span>X — комментарии</span><textarea data-social-prompt="twitterComments" class="text_pole" rows="5" spellcheck="false"></textarea></label>
+                <label class="gp-settings-field gp-settings-wide"><span>Instagram — посты</span><textarea data-social-prompt="instagramFeed" class="text_pole" rows="4" spellcheck="false"></textarea></label>
+                <label class="gp-settings-field gp-settings-wide"><span>Instagram — комментарии</span><textarea data-social-prompt="instagramComments" class="text_pole" rows="4" spellcheck="false"></textarea></label>
+                <label class="gp-settings-field gp-settings-wide"><span>Каналы и другие обсуждения</span><textarea data-social-prompt="channels" class="text_pole" rows="4" spellcheck="false"></textarea></label>
+                <label class="gp-settings-field gp-settings-wide"><span>Другие реакции (OnlyFans)</span><textarea data-social-prompt="other" class="text_pole" rows="4" spellcheck="false"></textarea></label>
+                <div class="gp-settings-wide gp-settings-control-row gp-social-prompt-actions">
+                    <button class="menu_button" id="gp-social-prompts-save" type="button">Сохранить</button>
+                    <button class="menu_button" id="gp-social-prompts-export" type="button">Экспорт JSON</button>
+                    <label class="menu_button gp-prompt-import-button">Импорт JSON<input type="file" id="gp-social-prompts-import" accept=".json,application/json" hidden></label>
+                    <button class="menu_button" id="gp-social-prompts-reset" type="button">По умолчанию</button>
                 </div>
             </div>
         </details>
@@ -466,6 +487,38 @@ function setupSettingsPanel() {
         getSettings().socialProfileId = this.value;
         saveSettingsDebounced();
     });
+    // Social prompt pack: editable without touching installed extension files.
+    const promptFields=document.querySelectorAll('#gp-social-prompt-editor textarea[data-social-prompt]');
+    const populateSocialPrompts=()=>{
+        const saved=getSettings().socialPromptOverrides||{};
+        for(const area of promptFields){const key=area.dataset.socialPrompt;
+            area.value=Object.hasOwn(saved,key)?saved[key]:(PHONE_SOCIAL_PROMPT_DEFAULTS[key]||'');}
+    };
+    const saveSocialPrompts=()=>{
+        const current={};
+        for(const area of promptFields){if(area.value.length>12000)throw new Error('Промпт слишком длинный: '+area.dataset.socialPrompt);
+            current[area.dataset.socialPrompt]=area.value;}
+        getSettings().socialPromptOverrides=normalizedSocialPrompts(current);
+        saveSettingsDebounced();
+    };
+    populateSocialPrompts();
+    $('#gp-social-prompts-save').on('click',()=>{try{saveSocialPrompts();toast('Промпты соцсетей сохранены','fa-check');}catch(e){toast(String(e.message),'fa-circle-exclamation');}});
+    $('#gp-social-prompts-export').on('click',()=>{
+        try{saveSocialPrompts();const value=JSON.stringify({format:'glassphone-social-prompts',version:1,prompts:getSettings().socialPromptOverrides},null,2);
+            const blob=new Blob([value],{type:'application/json'});const url=URL.createObjectURL(blob);
+            const a=document.createElement('a');a.href=url;a.download='glassphone-social-prompts.json';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);}
+        catch(e){toast(String(e.message),'fa-circle-exclamation');}
+    });
+    $('#gp-social-prompts-import').on('change',async function(){
+        const file=this.files?.[0];this.value='';if(!file)return;
+        try{if(file.size>100000)throw new Error('Файл слишком большой');
+            const loaded=JSON.parse(await file.text());const input=loaded.format==='glassphone-social-prompts'?loaded.prompts:loaded;
+            const updated=normalizedSocialPrompts(input);
+            getSettings().socialPromptOverrides={...PHONE_SOCIAL_PROMPT_DEFAULTS,...updated};
+            saveSettingsDebounced();populateSocialPrompts();toast('Промпты импортированы','fa-check');}
+        catch(e){toast('Ошибка импорта: '+String(e.message),'fa-circle-exclamation');}
+    });
+    $('#gp-social-prompts-reset').on('click',()=>{if(!confirm('Вернуть стандартные промпты соцсетей?'))return;getSettings().socialPromptOverrides={};saveSettingsDebounced();populateSocialPrompts();toast('Стандартные промпты восстановлены','fa-check');});
     $('#gp-set-narrator').on('change', function () {
         getMeta().narratorMode = this.checked;
         saveMeta();

@@ -42,3 +42,13 @@ AI-generated Twitter replies, Twitter/Instagram feed posts, Instagram/OnlyFans c
   - This service uses generic stock portraits, not actual likenesses of roleplay characters. For established characters choose their own image.
 * Old wallpaper, icons, custom CSS and social histories are not intentionally migrated/reset.
 * Narrator mode affects text context and account selection; it does not rewrite narrator character cards.
+
+
+## Ness 2.55.0 — editable social prompts / account profiles
+
+* Twitter/Instagram feed avatars and comment avatars open the SAME editable social account profile. Instagram Story viewer and OnlyFans posts use the profile control too.
+* Accounts store display name, handle, short bio, creator notes, avatar and a recurrence pin in per-chat metadata. This is NOT a phone contact and gives no private access.
+* Stable avatars: account-level edits, external portrait/photo services and manual image upload or URL. Reuses existing avatar overrides from earlier versions where possible.
+* A per-chat registry collects generated and previously visible accounts. Narrative cast/contact actors and people who interacted with the user's posts are pinned automatically; strangers recur once established, but should still be selected contextually.
+* Settings > "Редактор промптов соцсетей" provides editable global and per-app rules, export/import JSON for any external text editor, and defaults reset. The extension enforces JSON output and blocks unwanted author impersonation separately from user-editable style instructions.
+* New features are statically checked; full SillyTavern runtime / API behavior must be tested in the user's setup.
