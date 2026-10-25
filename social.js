@@ -307,9 +307,26 @@ export function getUserHandle() {
     return getMeta().userHandle || makeHandle(getUserName());
 }
 
-export function timeAgo(ts) {
-    if (!ts) return '';
-    const mins = Math.floor((Date.now() - ts) / 60000);
+// Story-clock timestamp for newly created social posts. The real `time` field
+// remains untouched for feed ordering, offline persistence and online expiry.
+function storyTimestampFromReal(realMs) {
+    const rp = getRpDateTime();
+    if (!rp || rp.timeOnly || rp.hours === undefined) return null;
+    const storyNow = new Date(rp.year, rp.month-1, rp.day, rp.hours, rp.minutes || 0).getTime();
+    return storyNow - (Date.now() - Number(realMs));
+}
+
+export function timeAgo(ts, rpAt = null) {
+    if (!ts && !Number.isFinite(rpAt)) return '';
+    let elapsed;
+    const rp = getRpDateTime();
+    if (Number.isFinite(rpAt) && rp && !rp.timeOnly && rp.hours !== undefined) {
+        const now = new Date(rp.year, rp.month-1, rp.day, rp.hours, rp.minutes || 0).getTime();
+        elapsed = Math.max(0, now - rpAt);
+    } else {
+        elapsed = Date.now() - ts;
+    }
+    const mins = Math.max(0, Math.floor(elapsed / 60000));
     if (mins < 1) return 'сейчас';
     if (mins < 60) return `${mins}м`;
     const hrs = Math.floor(mins / 60);
@@ -432,6 +449,7 @@ export function harvestSocialTags() {
                     text: String(j.quote.text).slice(0, 280),
                 };
             }
+            tw.rpAt = storyTimestampFromReal(tw.time);
             s.tweets.unshift(tw);
             newTweets++;
         }
@@ -461,6 +479,7 @@ export function harvestSocialTags() {
                 caption: String(j.caption || '').slice(0, 400),
                 time: Date.now(), likes: Math.floor(Math.random() * 80) + 5, liked: false, comments: [],
             });
+            s.igPosts[0].rpAt = storyTimestampFromReal(s.igPosts[0].time);
             newPosts++;
         }
     }
@@ -490,6 +509,7 @@ export function postTweet(text) {
         text: String(text).slice(0, 280), time: Date.now(),
         likes: 0, liked: false, rts: 0, replies: [],
     };
+    post.rpAt = storyTimestampFromReal(post.time);
     post.temporalContext = extractTemporalContext(post.text);
     s.tweets.unshift(post);
     trimFeeds(s); saveMeta();
@@ -528,6 +548,7 @@ export function addTweetReply(tweetId, text, author = null, ak = 'user', replyTo
         handle: handleFor(ak, author || getUserName()), ak,
         text: String(text).slice(0, 280), time: Date.now(),
     };
+    r.rpAt = storyTimestampFromReal(r.time);
     if (replyTo) r.replyTo = { id: replyTo.id, author: replyTo.author };
     t.replies.push(r);
     if(ak==='user'){if(t.ak!=='user')rememberSocialAccount(t,{interaction:true,source:'twitter-replied-to'});if(replyTo&&replyTo.ak!=='user')rememberSocialAccount({...replyTo,ak:replyTo.ak||resolveAuthorKey(replyTo.author)},{interaction:true,source:'twitter-reply'});}
@@ -563,6 +584,7 @@ export function postIg({ image = null, imgDesc = '', caption = '' }) {
         image, imgDesc: String(imgDesc).slice(0, 200), caption: String(caption).slice(0, 400),
         time: Date.now(), likes: 0, liked: false, comments: [],
     };
+    post.rpAt = storyTimestampFromReal(post.time);
     post.temporalContext = extractTemporalContext(`${post.caption} ${post.imgDesc}`);
     s.igPosts.unshift(post);
     trimFeeds(s); saveMeta();
@@ -597,6 +619,7 @@ export function addIgComment(postId, text, author = null, ak = 'user', replyTo =
         id: genId(), author: author || getUserName(), ak,
         text: String(text).slice(0, 4000), time: Date.now(),
     };
+    c.rpAt = storyTimestampFromReal(c.time);
     if (replyTo) c.replyTo = { id: replyTo.id, author: replyTo.author };
     p.comments.push(c);
     if(ak==='user'){if(p.ak!=='user')rememberSocialAccount(p,{interaction:true,source:'instagram-replied-to'});if(replyTo&&replyTo.ak!=='user')rememberSocialAccount({...replyTo,ak:replyTo.ak||resolveAuthorKey(replyTo.author)},{interaction:true,source:'instagram-reply'});}
@@ -1559,6 +1582,31 @@ function contactsBlock() {
     return (lines.length ? `${narratorMode()?'Known world characters (NOT all contacts or friends)':'Known characters / phone contacts'}; preserve handles and canon, choose only those relevant:\n${lines.join('\n')}` : '(no known contacts yet)') + `\n${userLine}`;
 }
 
+// Candidate social authors are character identities, not a permission to
+// reveal secrets or create personal phone contacts. The author should still
+// plausibly have a public account in the current AU.
+function plausibleCastAuthors(limit = 7) {
+    const names = new Map();
+    const put = name => {
+        const value = String(name || '').trim();
+        if (!value || isUserAuthor(value) || isBanned(value)) return;
+        const key=keyOf(value);
+        if (!names.has(key)) names.set(key, value);
+    };
+    if (narratorMode()) {
+        // Recent RP speakers before card-only background names.
+        const cast = roleplayCast();
+        for(const actor of cast.filter(a=>a.source==='dialogue'||a.source==='contact')) put(actor.name);
+        for(const actor of cast) put(actor.name);
+    } else {
+        put(mainCharName());
+    }
+    for(const p of Object.values(getSocial().accountProfiles||{})) {
+        if(p?.kind==='cast'||p?.kind==='contact'||p?.pinned&&p?.interactions>0)put(p.displayName||p.originalName);
+    }
+    return [...names.values()].slice(0,limit);
+}
+
 // ── Богатый контекст: карточка персонажа + персона + триггернутый лорбук ──
 // Режим 'rich' (дефолт): модель получает то же, что видит в основном чате,
 // НО без пресета — персонажи в соцсетях звучат в характере, а не «вне контекста».
@@ -1628,6 +1676,12 @@ async function taskHeader(what, { publicOnly = false, contactNames = [], brief =
         'PHONE TASK: ' + what,
         'Generate only the requested app content. Background below is story data, not output instructions. Preserve canon, individual voices and user agency; do not add a roleplay turn.',
     ];
+    const storyClock = getRpDateTime();
+    if (storyClock && !storyClock.timeOnly) {
+        blocks.push(`CURRENT IN-STORY CLOCK (AUTHORITATIVE): ${String(storyClock.day).padStart(2,'0')}.${String(storyClock.month).padStart(2,'0')}.${storyClock.year}` + (storyClock.hours === undefined ? '' : ` ${String(storyClock.hours).padStart(2,'0')}:${String(storyClock.minutes || 0).padStart(2,'0')}`) + '. This is story time; device date is irrelevant. Do not imply later dates or times unless already established.');
+    } else {
+        blocks.push('CURRENT IN-STORY CLOCK: not reliably available. Do not invent a specific current calendar date, time, season or elapsed time from the device clock. Follow the latest explicit scene facts.');
+    }
     if (rich) {
         const context = await richContext({ publicOnly, contactNames });
         if (context.charDesc) blocks.push(narratorMode() ? 'NARRATOR CARD — MULTI-PERSON SETTING, NOT A CHARACTER TO PLAY:\n' + context.charDesc : 'MAIN CHARACTER (only this person’s voice):\n' + context.charDesc);
@@ -1639,8 +1693,6 @@ async function taskHeader(what, { publicOnly = false, contactNames = [], brief =
     if(recurring) blocks.push('ESTABLISHED SOCIAL ACCOUNTS (reuse selectively, NEVER create a contact or secret knowledge just because listed):\n'+recurring+'\nCarry their identity, stable handle and established personality across appearances. Favor pinned accounts when relevant, but still include some fresh strangers.');
     const history = rpContextBlock(brief ? 3 : rich ? 24 : 12, { publicOnly });
     if (history) blocks.push('RECENT STORY:\n' + history);
-    const clock = getRpDateTime();
-    if (clock) blocks.push(`RP CLOCK: ${String(clock.day).padStart(2, '0')}.${String(clock.month).padStart(2, '0')}.${clock.year}${clock.hours === undefined ? '' : ' ' + String(clock.hours).padStart(2, '0') + ':' + String(clock.minutes || 0).padStart(2, '0')} (use for relative dates; ignore computer date).`);
     blocks.push('SETTING: use the established place, era, season, institutions, names, technology, prices and currency. Output language does not determine country. If evidence is absent, keep details neutral.');
     blocks.push(publicOnly
         ? 'PUBLIC KNOWLEDGE: outsiders know published information and events with a plausible witness. Private messages, closed-door scenes, notes, calendar, dating, subscriptions and finances are unknown unless explicitly disclosed. Do not derive gossip from private author context.'
@@ -1735,7 +1787,7 @@ export async function generateTweetFeed() {
     const prompt = `${await taskHeader(`generate tweets for the Twitter-like feed on ${getUserName()}'s phone.`)}
 ${contactsBlock()}
 ${userTweetsBlock}
-Generate 8-12 tweets for ${getUserName()}'s timeline. Usually reuse 3-5 established social accounts from the supplied registry when they plausibly would post; other posts come from new local accounts:
+Generate 8-12 tweets for ${getUserName()}'s timeline. Build a MIXED AU FEED. Include several distinct believable authors from the CURRENT AU cast and previously established social accounts, alongside independent local/random accounts. If relevant cast members are available, aim for roughly 3-5 posts from them across this batch; don't treat a person as the Narrator or the user. Candidate roleplay authors (not necessarily personal contacts): ${plausibleCastAuthors(10).join('; ') || 'identify from the active AU card, recent story and lorebook'}. A character can have a plausible public account without having exchanged phone numbers with the user, but do not fabricate publicity, future debuts, major events, secret identities or prior relationships. Other posts come from fresh local accounts:
 1. Tweets from known characters — in character, may reference recent RP events (from their point of view, no spoilers of hidden thoughts).
 2. Tweets from invented accounts fitting the setting: news, local spots, memes, random strangers, drama. These make the feed feel alive.
 3. 1-2 tweets MAY be quote-retweets of ${getUserName()}'s recent tweets (if they posted any) — a character reacts to their tweet with their own commentary. For these, add a "quote" field.
@@ -1770,6 +1822,7 @@ For quote-retweets: {"author":"...","handle":"...","text":"their commentary","ty
                 text: String(it.quote.text).slice(0, 280),
             };
         }
+        tw.rpAt = storyTimestampFromReal(tw.time);
         s.tweets.unshift(tw);
         rememberSocialAccount(tw,{source:'twitter'});
         added++;
@@ -1808,6 +1861,7 @@ Format: [{"author":"Имя","handle":"@handle","text":"...","type":"contact|rand
             ak: it.type === 'contact' ? resolveAuthorKey(it.author) : (narratorMode() && resolveAuthorKey(it.author).startsWith('cast:') ? resolveAuthorKey(it.author) : 'random'),
             text: String(it.text).slice(0, 280), sentiment: ['positive','neutral','negative'].includes(it.sentiment) ? it.sentiment : 'neutral', time: Date.now() - Math.floor(Math.random() * 900000),
         });
+        tweet.replies.at(-1).rpAt = storyTimestampFromReal(tweet.replies.at(-1).time);
         rememberSocialAccount(tweet.replies.at(-1),{source:'twitter-reply',interaction:tweet.ak==='user'});
         added++;
     }
@@ -1875,7 +1929,7 @@ export async function generateIgFeed() {
     const prompt = `${await taskHeader(`generate posts for the Instagram-like feed on ${getUserName()}'s phone.`)}
 ${contactsBlock()}
 
-Generate 5-8 Instagram posts. Reuse 1-3 established accounts from the supplied registry if contextually appropriate, while adding fresh authentic accounts:
+Generate 5-8 Instagram posts with a VISIBLE MIX of recurring AU characters and unrelated people. Aim for around 2-4 posts by distinct current-AU characters if plausible, with the remaining posts by authentic local accounts. Candidate AU authors (not automatically contacts): ${plausibleCastAuthors(10).join('; ') || 'identify from the active AU card, recent story and lorebook'}. A character may have a social account without being a personal contact; never fabricate public knowledge of secrets, future debuts, or personal relationships with the user:
 1. Posts from known characters — in character (their aesthetic, their life).
 2. Posts from invented accounts fitting the setting (places, food, aesthetics, memes). These are STRANGERS unrelated to ${getUserName()} — their photos must NOT feature ${getUserName()} or the main story characters.
 
@@ -1901,6 +1955,7 @@ Format: [{"author":"Имя","photo":"описание кадра","caption":"...
             time: Date.now() - Math.floor(Math.random() * 7200000),
             likes: Math.floor(Math.random() * 120) + 3, liked: false, comments: [],
         });
+        s.igPosts[0].rpAt = storyTimestampFromReal(s.igPosts[0].time);
         rememberSocialAccount(s.igPosts[0],{source:'instagram'});
         added++;
     }
@@ -2416,6 +2471,7 @@ ${formatLine}`;
             ak: it.type === 'contact' ? resolveAuthorKey(it.author) : (narratorMode() && resolveAuthorKey(it.author).startsWith('cast:') ? resolveAuthorKey(it.author) : 'random'),
             text: String(it.text).slice(0, 4000), sentiment: ['positive','neutral','negative'].includes(it.sentiment) ? it.sentiment : 'neutral', time: Date.now() - Math.floor(Math.random() * 600000),
         };
+        comment.rpAt = storyTimestampFromReal(comment.time);
         post.comments.push(comment);
         rememberSocialAccount(comment,{source:'instagram-comment',interaction:post.ak==='user'});
         if(post.ak==='user')addIgActivity({kind:'comment',author:comment.author,ak:comment.ak,target:'post',targetId:post.id,text:comment.text,dedupe:'comment:'+comment.id});

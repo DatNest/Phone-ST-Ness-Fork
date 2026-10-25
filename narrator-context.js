@@ -42,7 +42,15 @@ export function roleplayCast({ publicOnly = false, max = 45 } = {}) {
     // Existing address book entries are grounded, not speculative contacts.
     try { for(const c of scanChat().contacts.values()) add(c.originalName || c.name, 'contact'); } catch {}
     // Only clear person headings and role labels — not every capitalized word.
+    // Support ensemble AU cards with cast sections and bullet name lists.
+    let inCastSection = false;
     for (const line of description.split('\n').slice(0, 600)) {
+        const section=line.trim();
+        if (/^#{1,5}\s+/.test(section)) {
+            inCastSection=/\b(?:cast|characters|npc|roster)\b|персонаж|действующ[а-я]*\s+лиц|герои|состав\s+героев/iu.test(section);
+        }
+        const bullet=section.match(/^(?:[-*•]\s+)([A-ZА-ЯЁ][\p{L}.'’-]+(?:[ -][A-ZА-ЯЁ][\p{L}.'’-]+){0,3})\s*(?=[—–:—(]|$)/u);
+        if (bullet && (inCastSection || /(?:персонаж|character|роль|role|npc|герой|героин|лет|age|years|взросл[а-я]*|adult)/iu.test(section.slice(bullet[0].length)))) add(bullet[1], 'card');
         let m=line.match(/^\s*#{1,5}\s+([A-ZА-ЯЁ][\p{L}.'’-]+(?:[ -][A-ZА-ЯЁ][\p{L}.'’-]+){0,3})\s*$/u);
         if (m) add(m[1], 'card');
         m=line.match(/^\s*(?:[-*]\s*)?([A-ZА-ЯЁ][\p{L}.'’-]+(?:[ -][A-ZА-ЯЁ][\p{L}.'’-]+){0,3})\s*[—–:]\s*(?:персонаж|character|возраст|age|роль|role|\d{1,3}\s*(?:лет|y\.o\.))/iu);

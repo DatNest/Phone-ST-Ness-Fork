@@ -52,3 +52,12 @@ AI-generated Twitter replies, Twitter/Instagram feed posts, Instagram/OnlyFans c
 * A per-chat registry collects generated and previously visible accounts. Narrative cast/contact actors and people who interacted with the user's posts are pinned automatically; strangers recur once established, but should still be selected contextually.
 * Settings > "Редактор промптов соцсетей" provides editable global and per-app rules, export/import JSON for any external text editor, and defaults reset. The extension enforces JSON output and blocks unwanted author impersonation separately from user-editable style instructions.
 * New features are statically checked; full SillyTavern runtime / API behavior must be tested in the user's setup.
+
+## Ness 2.55.1 — Social AU authors & story clock diagnostic fix
+
+* Strengthened model instructions so established AU characters can publish alongside unrelated local users; no requirement to be a personal phone contact. Characters are selected from the active story, not imported future canon.
+* Narrator roster recognizes more common card formats (labelled role bullets and cast sections), while not blindly treating every capitalized place as a person.
+* Story clock now receives an explicit priority header before lengthy card and lorebook context. If the in-story date cannot be parsed, generator is asked not to use device date as story canon.
+* Newly generated X and Instagram entries save an optional `rpAt` timestamp alongside the original real timestamp. X/Instagram feed labels use RP elapsed time when a valid RP clock exists. Old posts continue using legacy real timestamps without migration.
+* All previous account profiles, avatars, author safeguards and JSON-editable prompts stay intact.
+* Limitations: if the in-story clock is absent or not parseable from recent RP posts / calendar injections, a prompt cannot reconstruct it reliably; calendar/roleplay time markers are still needed. Other apps' timestamps may still use real time. These changes are statically checked, not runtime-tested in the user's ST.

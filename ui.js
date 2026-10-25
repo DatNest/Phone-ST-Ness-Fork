@@ -2704,7 +2704,7 @@ function twCard(t, { clickable = true } = {}) {
             <div class="gp-tw-meta">
                 <span class="gp-tw-name">${esc(profileDisplayName(t))}</span>
                 <span class="gp-tw-handle">${esc(dispHandle(t))}</span>
-                <span class="gp-tw-time">· ${esc(timeAgo(t.time))}</span>
+                <span class="gp-tw-time">· ${esc(timeAgo(t.time,t.rpAt))}</span>
                 ${isUser
                     ? `<button class="gp-tw-del" data-del="${esc(t.id)}" title="Удалить">${ic('fa-xmark')}</button>`
                     : `<button class="gp-tw-del" data-regen-tw="${esc(t.id)}" title="Перегенерировать пост">${ic('fa-rotate-right')}</button>
@@ -2898,7 +2898,7 @@ function renderTwThread(screen) {
                             <div class="gp-tw-meta">
                                 <span class="gp-tw-name">${esc(profileDisplayName(r))}</span>
                                 <span class="gp-tw-handle">${esc(dispHandle(r))}</span>
-                                <span class="gp-tw-time">· ${esc(timeAgo(r.time))}</span>
+                                <span class="gp-tw-time">· ${esc(timeAgo(r.time,r.rpAt))}</span>
                                 <button class="gp-reply-btn" data-replyto-tw="${esc(r.id)}" title="Ответить">${ic('fa-reply')}</button>
                                 <button class="gp-reply-del" data-del-reply="${esc(r.id)}" title="Удалить">${ic('fa-xmark')}</button>
                             </div>
@@ -3113,7 +3113,7 @@ function igCard(p, { clickable = true } = {}) {
                 <span class="gp-ig-name">${esc(profileDisplayName(p))}</span>
                 <span class="gp-ig-handle">${esc(handle)}</span>
             </span>
-            <span class="gp-tw-time">· ${esc(timeAgo(p.time))}</span>
+            <span class="gp-tw-time">· ${esc(timeAgo(p.time,p.rpAt))}</span>
             <button type="button" class="gp-insta-post-menu" data-ig-menu="${esc(p.id)}" aria-label="Действия с публикацией">${bankIcon('Ellipsis')}</button><span hidden>
             ${isUser
                 ? `<button class="gp-tw-del" data-del-ig="${esc(p.id)}" title="Удалить">${ic('fa-xmark')}</button>`
@@ -3352,7 +3352,7 @@ function renderIgView(screen) {
                         <div class="gp-reply-body">
                             <div class="gp-tw-meta">
                                 <span class="gp-tw-name">${esc(profileDisplayName(c))}</span>
-                                <span class="gp-tw-time">· ${esc(timeAgo(c.time))}</span>
+                                <span class="gp-tw-time">· ${esc(timeAgo(c.time,c.rpAt))}</span>
                                 <button class="gp-reply-btn" data-replyto-ig="${esc(c.id)}" title="Ответить">${ic('fa-reply')}</button>
                                 ${c.ak!=='user'?`<button type="button" class="gp-reply-btn" data-reroll-igcomment="${esc(c.id)}" aria-label="Переписать комментарий" title="Переписать комментарий" ${genBusy?'disabled':''}>${bankIcon('RotateCw')}</button>`:''}
                                 <button class="gp-reply-del" data-del-igcomment="${esc(c.id)}" title="Удалить">${ic('fa-xmark')}</button>
@@ -3848,7 +3848,7 @@ function ofCard(p, { clickable = true } = {}) {
             ${socialAccountButton(p,'gp-avatar gp-avatar-xs')}
             <span class="gp-ig-name">${esc(profileDisplayName(p))}</span>
             <span class="gp-of-badge">${ic('fa-lock')}${p.price > 0 ? ` $${p.price}` : ' подписка'}</span>
-            <span class="gp-tw-time">· ${esc(timeAgo(p.time))}</span>
+            <span class="gp-tw-time">· ${esc(timeAgo(p.time,p.rpAt))}</span>
             <button class="gp-tw-del" data-del-of="${esc(p.id)}" title="Удалить">${ic('fa-xmark')}</button>
         </div>
         <div class="${clickable ? 'gp-clickable' : ''}" data-open-of="${esc(p.id)}">${ofIsText(p)
@@ -3937,7 +3937,7 @@ function renderOfView(screen) {
                             <div class="gp-tw-meta">
                                 <span class="gp-tw-name">${esc(profileDisplayName(c))}</span>
                                 ${c.tip ? `<span class="gp-of-tip-badge">${ic('fa-sack-dollar')} $${c.tip}</span>` : ''}
-                                <span class="gp-tw-time">· ${esc(timeAgo(c.time))}</span>
+                                <span class="gp-tw-time">· ${esc(timeAgo(c.time,c.rpAt))}</span>
                                 <button class="gp-reply-del" data-del-ofcomment="${esc(c.id)}" title="Удалить">${ic('fa-xmark')}</button>
                             </div>
                             <div class="gp-tw-text">${esc(c.text)}</div>
