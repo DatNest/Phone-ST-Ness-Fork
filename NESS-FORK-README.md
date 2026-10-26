@@ -61,3 +61,11 @@ AI-generated Twitter replies, Twitter/Instagram feed posts, Instagram/OnlyFans c
 * Newly generated X and Instagram entries save an optional `rpAt` timestamp alongside the original real timestamp. X/Instagram feed labels use RP elapsed time when a valid RP clock exists. Old posts continue using legacy real timestamps without migration.
 * All previous account profiles, avatars, author safeguards and JSON-editable prompts stay intact.
 * Limitations: if the in-story clock is absent or not parseable from recent RP posts / calendar injections, a prompt cannot reconstruct it reliably; calendar/roleplay time markers are still needed. Other apps' timestamps may still use real time. These changes are statically checked, not runtime-tested in the user's ST.
+
+## Ness 2.55.2 — Guarded RP clock (SMS deadline fix)
+- RP clock now accepts explicit present-tense clock references, RP_DATE tags and validated story-clock tags from actual RP messages, rather than interpreting any HH:MM in the last messages as current time.
+- Outgoing SMS and incoming SMS-only ghost replies (including ones carrying an accidental clock tag) cannot silently advance the RP clock.
+- Future appointments, curfews, proposed meeting times, calendar-plan deadlines and phone journal entries remain content, not story-clock updates.
+- Calendar injections must explicitly identify CURRENT date/time; GlassPhone's own injected prompt is excluded from calendar source discovery.
+- The standalone parseAnyDateTime helper remains unchanged for interpreting real appointments and calendar plans.
+- No phone metadata, contacts, posts, avatars or prompt overrides are reset by this patch.
