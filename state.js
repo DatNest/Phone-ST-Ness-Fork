@@ -7,12 +7,12 @@ import { saveBase64AsFile } from '../../../utils.js';
 import { readPhoneMessage } from './message-sources.js';
 import { captureRoleplaySms, extractRoleplaySms, hasMixedRoleplaySms } from './roleplay-sms.js';
 import { cleanContactName, contactNameKey, redirectedContactKey, resolveIdentity, repairContactMetadata } from './contact-identity.js';
-import { isPhoneOnlyClockMessage, extractPresentRpClock, currentNarrativeDateLine } from './story-clock-guard.js';
+import { isPhoneOnlyClockMessage, extractPresentRpClock, currentNarrativeDateLine, parseHtStoryClock } from './story-clock-guard.js';
 
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '2.56.0-ness.9';
+export const GP_VERSION = '2.56.1-ness.10';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -992,6 +992,9 @@ const TIME_TAG_RE = /(?:<!--\s*tel:time:|<-{2,}\s*)\s*(\d{1,2}):([0-5]\d)\s*[-�
 // Время сюжета из метки в тексте сообщения
 export function parseTimeTag(text) {
     if (!text) return null;
+    const ht = parseHtStoryClock(text);
+    // Complete HT metadata is a first-class timestamp everywhere in Phone-ST.
+    if (ht?.date && ht?.time) return { ...ht.date, ...ht.time };
     const m = String(text).match(TIME_TAG_RE);
     if (!m) return null;
     const hours = Number(m[1]), minutes = Number(m[2]);
@@ -1170,6 +1173,10 @@ function strictTime(value) {
 function evidenceForPost(message) {
     if (!message?.mes || message.is_system || isPhoneOnlyClockMessage(message)) return {date:null,time:null};
     const source=stripThink(message.mes);
+    // Current RP timestamp in an HT HTML comment has priority over older
+    // phone-specific tags or arbitrary "time" mentions in the same post.
+    const ht=parseHtStoryClock(source);
+    if (ht) return { date:strictDate(ht.date), time:strictTime(ht.time) };
     const tag=parseTimeTag(source);
     if (tag) return {date:strictDate(tag),time:strictTime(tag)};
     let date=null,time=null;

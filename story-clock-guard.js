@@ -13,6 +13,43 @@ const CUR_CLOCK = new RegExp(
 );
 const HHMM = new RegExp('^' + CLOCK + '$');
 
+
+// Explicit CURRENT story-clock metadata written by RP posts.
+// Example: <!-- HT date=2024-10-23 | time=13:58 | when=23 октября | place=... -->
+// Only the date/time fields are authoritative. "when"/"place" are NOT clock values.
+// Comments are parsed before generic prose is examined, so a scheduled meeting
+// elsewhere in the message cannot replace the actual story clock.
+export function parseHtStoryClock(text) {
+    let last = null;
+    const source = String(text || '').replace(/```[\s\S]*?```/g, '');
+    const comments = source.matchAll(/<!--\s*HT\b([\s\S]*?)-->/gi);
+    for (const comment of comments) {
+        const fields = Object.create(null);
+        for (const field of comment[1].split('|')) {
+            const match = /^\s*(date|time)\s*=\s*(.*?)\s*$/i.exec(field);
+            if (match) fields[match[1].toLowerCase()] = match[2].replace(/^["']|["']$/g, '').trim();
+        }
+        let date = null, time = null;
+        const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(fields.date || '');
+        const dotted = /^(\d{1,2})[./](\d{1,2})[./](\d{4})$/.exec(fields.date || '');
+        if (iso || dotted) {
+            const year = Number(iso ? iso[1] : dotted[3]);
+            const month = Number(iso ? iso[2] : dotted[2]);
+            const day = Number(iso ? iso[3] : dotted[1]);
+            const check = new Date(0);
+            check.setFullYear(year, month - 1, day);
+            if (year >= 1 && year <= 9999 && month >= 1 && month <= 12 && day >= 1 && day <= 31 &&
+                check.getFullYear() === year && check.getMonth() === month - 1 && check.getDate() === day) {
+                date = { year, month, day };
+            }
+        }
+        const clock = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(fields.time || '');
+        if (clock) time = { hours: Number(clock[1]), minutes: Number(clock[2]) };
+        if (date || time) last = { date, time };
+    }
+    return last;
+}
+
 export function isPhoneOnlyClockMessage(message) {
     if (!message?.mes) return false;
     if (message.extra?.isSmsSilent) return true;
