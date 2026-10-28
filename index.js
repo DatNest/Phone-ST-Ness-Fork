@@ -70,7 +70,8 @@ function setupSettingsPanel() {
                 <div class="gp-settings-wide gp-story-clock-settings">
                     <label class="gp-settings-field gp-settings-wide"><span>Дата и время ролевой (для этого чата)</span><select id="gp-set-story-clock-mode" class="text_pole"><option value="auto">Автоматически из ролевой / календаря</option><option value="manual">Вручную — зафиксировать</option></select><small>Если источник временно исчез, сохраняется последняя достоверная отметка. Реальная дата устройства не подставляется.</small></label>
                     <div class="gp-settings-control-row"><input type="date" id="gp-set-story-date" class="text_pole" aria-label="Игровая дата"><input type="time" id="gp-set-story-time" class="text_pole" aria-label="Игровое время"><button type="button" class="menu_button" id="gp-set-story-clock-save">Сохранить дату</button></div>
-                    <small id="gp-story-clock-status" class="gp-settings-wide"></small>
+                    <div class="gp-settings-control-row"><button type="button" class="menu_button" id="gp-set-story-clock-refresh"><i class="fa-solid fa-rotate" aria-hidden="true"></i> Обновить время и дату</button></div><small>При каждом открытии телефона время проверяется автоматически. Кнопка запускает повторное чтение сейчас.</small>
+                    <small id="gp-story-clock-status" class="gp-settings-wide" aria-live="polite"></small>
                 </div>
                 <label class="gp-settings-field"><span>Твой ник (@)</span><input type="text" id="gp-set-handle" class="text_pole" maxlength="21" placeholder="авто из имени"></label>
                 <label class="gp-settings-field"><span>Узнать автора анонимки</span><input type="number" id="gp-set-anonprice" class="text_pole gp-settings-number" min="0" step="100" value="${Number(s.anonRevealPrice) || 2500}"><small>цена первого имени, дальше растёт</small></label>
@@ -534,7 +535,11 @@ function setupSettingsPanel() {
             date.value=`${String(manual.year).padStart(4,'0')}-${String(manual.month).padStart(2,'0')}-${String(manual.day).padStart(2,'0')}`;
             time.value=manual.hours!==undefined ? `${String(manual.hours).padStart(2,'0')}:${String(manual.minutes||0).padStart(2,'0')}` : '';
         } else { date.value='';time.value=''; }
-        if(status){const dt=getRpDateTime();status.textContent=dt?`Сейчас: ${String(dt.day).padStart(2,'0')}.${String(dt.month).padStart(2,'0')}.${dt.year}${dt.hours===undefined?'':` ${String(dt.hours).padStart(2,'0')}:${String(dt.minutes).padStart(2,'0')}`}${mode.value==='manual'?' (вручную)':''}`:'Сюжетная дата пока не найдена — реальная не подставляется';}
+        if(status){
+            const dt=getRpDateTime();
+            const marker=mode.value==='manual'?' (вручную)':dt?.source==='lastKnown'?' (последняя сохранённая отметка)':'';
+            status.textContent=dt?`Сейчас: ${String(dt.day).padStart(2,'0')}.${String(dt.month).padStart(2,'0')}.${dt.year}${dt.hours===undefined?'':` ${String(dt.hours).padStart(2,'0')}:${String(dt.minutes).padStart(2,'0')}`}${marker}`:'Сюжетная дата пока не найдена — реальная не подставляется';
+        }
     };
     $('#gp-set-story-clock-mode').on('change', function(){
         const meta=getMeta();
@@ -550,6 +555,22 @@ function setupSettingsPanel() {
         if(checked.getFullYear()!==year||checked.getMonth()!==month-1||checked.getDate()!==day){toast('Неверная игровая дата','fa-circle-exclamation');return;}
         const meta=getMeta();meta.storyClockManual={year,month,day,hours:Number(hm[1]),minutes:Number(hm[2])};meta.storyClockMode='manual';
         saveMeta();invalidateStoryClockCache();refreshStoryClockForm();if(isPhoneOpen())render();toast('Игровая дата сохранена только для этого чата','fa-check');
+    });
+    $('#gp-set-story-clock-refresh').on('click', function(){
+        const meta=getMeta();
+        if(meta.storyClockMode==='manual'){
+            // Preserve manually fixed time. A refresh must not silently destroy it.
+            toast('Сейчас включено ручное время. Выбери «Автоматически», чтобы обновлять дату из ролевой.','fa-circle-info');
+            refreshStoryClockForm();
+            return;
+        }
+        invalidateStoryClockCache();
+        const dt=getRpDateTime();
+        refreshStoryClockForm();
+        if(isPhoneOpen())render();
+        if(!dt) toast('Игровая дата не найдена. Реальная дата не подставлена.','fa-circle-info');
+        else if(dt.source==='lastKnown') toast('Новая дата не найдена. Сохранена последняя достоверная отметка.','fa-clock');
+        else toast('Игровые дата и время обновлены из ролевой / календаря','fa-check');
     });
     refreshStoryClockForm();
     $('#gp-set-narrator').on('change', function () {
@@ -729,7 +750,7 @@ jQuery(async () => {
                     applyChatHiding();
                     // Ник юзера per-chat — обновляем поле в настройках
                     try { $('#gp-set-handle').val(getUserHandle().replace(/^@/, '')); } catch (e) { /* ignore */ }
-                    try { refreshStoryClockForm(); invalidateStoryClockCache(); } catch (e) { /* ignore */ }
+                    try { invalidateStoryClockCache(); refreshStoryClockForm(); } catch (e) { /* ignore */ }
                     if (isPhoneOpen()) render();
                 }, 150);
             });

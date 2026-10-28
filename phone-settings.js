@@ -23,7 +23,11 @@ function refreshClockControls(){
     mode.value=meta.storyClockMode==='manual'?'manual':'auto';
     if(date)date.value=manual.year?`${String(manual.year).padStart(4,'0')}-${String(manual.month).padStart(2,'0')}-${String(manual.day).padStart(2,'0')}`:'';
     if(time)time.value=manual.hours!==undefined?`${String(manual.hours).padStart(2,'0')}:${String(manual.minutes||0).padStart(2,'0')}`:'';
-    if(status){const dt=getRpDateTime();status.textContent=dt?`Сейчас: ${String(dt.day).padStart(2,'0')}.${String(dt.month).padStart(2,'0')}.${dt.year}${dt.hours===undefined?'':` ${String(dt.hours).padStart(2,'0')}:${String(dt.minutes).padStart(2,'0')}`}`:'Сюжетная дата пока не найдена';}
+    if(status){
+        const dt=getRpDateTime();
+        const suffix=mode.value==='manual'?' (вручную)':dt?.source==='lastKnown'?' (последняя сохранённая отметка)':'';
+        status.textContent=dt?`Сейчас: ${String(dt.day).padStart(2,'0')}.${String(dt.month).padStart(2,'0')}.${dt.year}${dt.hours===undefined?'':` ${String(dt.hours).padStart(2,'0')}:${String(dt.minutes).padStart(2,'0')}`}${suffix}`:'Сюжетная дата пока не найдена';
+    }
 }
 export function renderPhoneSettings(screen,api){
     const mounted=screen.querySelector('.gp-phone-settings-mount');

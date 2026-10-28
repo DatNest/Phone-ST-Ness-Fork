@@ -79,3 +79,10 @@ AI-generated Twitter replies, Twitter/Instagram feed posts, Instagram/OnlyFans c
 - Russian present-date parsing is fixed, and the cache signature now includes the chat identity.
 - Internal operational timestamps (file IDs, timeouts, update ordering) continue to use real time; this patch is about RP date display and source selection.
 - Previous No Auto User / accounts / images / social prompt editor are unchanged.
+
+## Ness 2.55.4 — Refresh story clock on every open
+- Every opening of the phone invalidates the detected clock cache and scans the active RP chat/calendar again **before** the screen renders, without needing a page reload.
+- Settings → Model and context → Story date/time: added **«Обновить время и дату»** to recheck sources on demand.
+- When sources provide no current clock, keeps this chat's last-known RP timestamp instead of using device time; settings explicitly labels the cached value.
+- Manual clock remains fixed until the user selects automatic mode. Refreshing does not silently override manual time.
+- SMS deadlines remain excluded from current-time detection by the existing guarded parser. No saved posts, prompts, or appearance settings are modified.

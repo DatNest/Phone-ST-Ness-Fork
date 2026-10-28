@@ -12,7 +12,7 @@ import { isPhoneOnlyClockMessage, extractPresentRpClock, currentCalendarDateLine
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '2.55.3-ness.7';
+export const GP_VERSION = '2.55.4-ness.8';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -1339,6 +1339,10 @@ export function getRpDateTime() {
                 }
             }
         }
+        // Display whether the result was actually found in RP/calendar now,
+        // or restored from this chat's previously verified clock snapshot.
+        // This diagnostic is ephemeral and is not written into chat metadata.
+        if (res) res.source = detected ? 'detected' : 'lastKnown';
         _rpDateCache = res || null;
         return _rpDateCache;
     } catch (e) { _rpDateCache = null; return null; }

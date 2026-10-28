@@ -33,7 +33,7 @@ import { sendMessageAsUser, saveSettingsDebounced, saveChatConditional, user_ava
 import { saveBase64AsFile } from '../../../utils.js';
 import {
     getSettings, getThreadList, getThread, markRead, addManualContact, hideContact,
-    randomNumber, getTotalUnread, fmtTime, getRpDateTime, keyOf, getHiddenMessageIndexes, resolveContactKey, contactOriginalName,
+    randomNumber, getTotalUnread, fmtTime, getRpDateTime, invalidateStoryClockCache, keyOf, getHiddenMessageIndexes, resolveContactKey, contactOriginalName,
     addGroup, delGroup, updateGroupMembers, renameContact, banAccount,
     isSmsBlocked, blockSmsContact, unblockSmsContact, saveMeta, invalidateChatCache, getMeta, getPhoneMessageText, phoneActivityAllowed,
 } from './state.js';
@@ -722,6 +722,10 @@ function syncPhoneViewOwner() {
 
 export function openPhone(threadKey = null) {
     syncPhoneViewOwner();
+    // Re-read the CURRENT chat and current calendar injections on every open.
+    // Never use the device clock as fallback. Manual per-chat clocks still win.
+    invalidateStoryClockCache();
+    getRpDateTime();
     createPhone();
     applySkin();
     const ov = document.getElementById('gp-overlay');
