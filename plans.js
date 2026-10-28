@@ -29,8 +29,7 @@ export function getPlans() {
 export function rpToday() {
     const d = getRpDateTime();
     if (d && Number.isFinite(d.year)) return iso(d.year, d.month, d.day);
-    const n = new Date();
-    return iso(n.getFullYear(), n.getMonth() + 1, n.getDate());
+    return ''; // Unknown story date, never silently use device date.
 }
 
 function iso(y, m, d) {
@@ -44,8 +43,8 @@ export function parsePlanDate(raw) {
     const dmy = s.match(/^(\d{1,2})[.\-/](\d{1,2})(?:[.\-/](\d{2,4}))?$/);
     if (dmy) {
         const today = rpToday();
-        const year = dmy[3] ? Number(dmy[3].length === 2 ? `20${dmy[3]}` : dmy[3]) : Number(today.slice(0, 4));
-        return iso(year, Number(dmy[2]), Number(dmy[1]));
+        const year = dmy[3] ? Number(dmy[3].length === 2 ? `20${dmy[3]}` : dmy[3]) : (today ? Number(today.slice(0, 4)) : null);
+        return year ? iso(year, Number(dmy[2]), Number(dmy[1])) : '';
     }
     const ymd = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
     if (ymd) return iso(Number(ymd[1]), Number(ymd[2]), Number(ymd[3]));
@@ -58,6 +57,7 @@ export function parsePlanDate(raw) {
 }
 
 export function shiftDays(isoDate, days) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(isoDate))) return '';
     const [y, m, d] = isoDate.split('-').map(Number);
     const dt = new Date(Date.UTC(y, m - 1, d));
     dt.setUTCDate(dt.getUTCDate() + days);
@@ -65,6 +65,7 @@ export function shiftDays(isoDate, days) {
 }
 
 export function daysBetween(a, b) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(a)) || !/^\d{4}-\d{2}-\d{2}$/.test(String(b))) return NaN;
     const [ay, am, ad] = a.split('-').map(Number);
     const [by, bm, bd] = b.split('-').map(Number);
     return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86400000);
@@ -73,10 +74,12 @@ export function daysBetween(a, b) {
 export function addPlan({ text, date, time = '', who = 'user', source = 'user' }) {
     const t = String(text || '').trim();
     if (!t) return null;
+    const resolvedDate = parsePlanDate(date);
+    if (!resolvedDate) return null; // A plan cannot get a fabricated real-world date.
     const plan = {
         id: genId(),
         text: t.slice(0, 200),
-        date: parsePlanDate(date),
+        date: resolvedDate,
         time: String(time || '').trim().slice(0, 5),
         who: PLAN_WHO[who] ? who : 'user',
         done: false,
@@ -146,6 +149,7 @@ export function groupedPlans() {
     for (const p of getPlans()) {
         if (p.done) { groups.done.push(p); continue; }
         const diff = daysBetween(today, p.date);
+        if (!Number.isFinite(diff)) { groups.later.push(p); continue; }
         if (diff < 0) groups.overdue.push(p);
         else if (diff === 0) groups.today.push(p);
         else if (diff === 1) groups.tomorrow.push(p);
@@ -162,6 +166,7 @@ export function plansBadgeCount() {
 }
 
 export function fmtPlanDate(isoDate) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(isoDate))) return '—';
     const [y, m, d] = isoDate.split('-');
     return `${d}.${m}${y !== rpToday().slice(0, 4) ? `.${y}` : ''}`;
 }
@@ -210,7 +215,7 @@ export function monthGrid(ym) {
 // Короткий список ближайшего: модель должна помнить, о чём договорились,
 // и иметь право напомнить, сорвать или перенести.
 export function plansInjectLine() {
-    if (!isPhoneAppInstalled('calendar')) return '';
+    if (!isPhoneAppInstalled('calendar') || !rpToday()) return '';
     const g = groupedPlans();
     const today = rpToday();
     const near = [...g.overdue, ...g.today, ...g.tomorrow, ...g.week].slice(0, 8);

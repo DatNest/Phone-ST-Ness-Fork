@@ -133,6 +133,8 @@ function widgetHTML(w){
     if(w.type==='messages'){const threads=getThreadList();const choices=w.threadKey&&w.threadKey!=='recent'?threads.filter(t=>t.key===w.threadKey):threads.filter(t=>t.last||t.unread).slice(0,2);content='<span class="gp-widget-heading">'+I('fa-comment-dots')+' '+L('Сообщения','Messages')+'</span>'+choices.map(t=>'<div class="gp-widget-message"><b>'+esc(t.name)+(t.unread?' <i>'+t.unread+'</i>':'')+'</b><small>'+esc(t.last?.text||L('Открыть переписку','Open conversation'))+'</small></div>').join('');if(!choices.length)content+='<p>'+L('Пока нет сообщений','No messages yet')+'</p>';route='list';}
     if(w.type==='calendar'){
         const today=rpToday(),filter=w.who||'all';
+        if(!today){content='<span class="gp-widget-heading">'+I('fa-calendar-days')+' '+L('Календарь','Calendar')+'</span><p>'+L('Дата сюжета не установлена','Story date unknown')+'</p>';route='calendar';}
+        else {
         const all=getPlans().filter(p=>!p.done&&(filter==='all'||p.who===filter||(filter!=='both'&&p.who==='both')));
         all.sort((a,b)=>a.date.localeCompare(b.date)||String(a.time||'99:99').localeCompare(String(b.time||'99:99')));
         const upcoming=all.filter(p=>p.date>=today),items=(upcoming.length?upcoming:all).slice(0,w.wide?3:2);
@@ -140,6 +142,7 @@ function widgetHTML(w){
         content='<span class="gp-widget-heading">'+I('fa-calendar-days')+' '+L('Календарь','Calendar')+'</span><div class="gp-widget-caldate"><b>'+Number(today.slice(8))+'</b><small>'+esc(month)+'</small></div>'+
             (items.length?items.map(p=>'<div class="gp-widget-plan"><b>'+esc(p.date===today?(p.time||L('Сегодня','Today')):fmtPlanDate(p.date))+'</b><span>'+esc(p.text)+'</span><small>'+L(p.who==='user'?'Я':p.who==='char'?'Персонаж':'Вместе',p.who==='user'?'You':p.who==='char'?'Character':'Together')+'</small></div>').join(''):'<p>'+L('Ближайших планов нет','No upcoming plans')+'</p>');
         route='calendar';
+        }
     }
     return '<div class="gp-home-widget gp-widget-'+w.type+(w.wide?' gp-widget-wide':'')+'" data-widget="'+esc(w.id)+'" '+(route?'data-widget-route="'+route+'"':'')+' role="button" tabindex="0">'+content+(state.editing?'<button class="gp-widget-edit" data-edit-widget="'+esc(w.id)+'" aria-label="'+L('Настроить виджет','Edit widget')+'">'+I('fa-pen')+'</button><button class="gp-widget-remove" data-remove-widget="'+esc(w.id)+'" aria-label="'+L('Убрать виджет','Remove widget')+'">'+I('fa-minus')+'</button>':'')+'</div>';
 }

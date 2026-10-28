@@ -47,7 +47,7 @@ export function currentNarrativeDateLine(text) {
     const clean = String(text || '').replace(HTML_COMMENT_RE, '').replace(/```[\s\S]*?```/g, '');
     for (const line of clean.split(/\n/).reverse()) {
         const start = line.trim();
-        if (/^(?:сейчас|сегодня|на\s+календаре|текущая\s+дата|сюжетная\s+дата|дата\s+в\s+(?:истории|ролевой)|currently|today(?:\s+is)?|current\s+(?:story\s+)?date)\b/iu.test(start)
+        if (/^(?:сейчас|сегодня|на\s+календаре|текущая\s+дата|сюжетная\s+дата|ролев(?:ая|ую)\s+дата|дата\s+в\s+(?:истории|ролевой)|currently|today(?:\s+is)?|current\s+(?:story\s+)?date)(?=$|[^\p{L}\p{N}_])/iu.test(start)
             && /(?:\b\d{4}-\d{1,2}-\d{1,2}\b|\b\d{1,2}[.\/-]\d{1,2}(?:[.\/-]\d{2,4})?\b|\b\d{1,2}\s+[а-яa-z]{3,}\s+\d{4}\b)/iu.test(start)) return start;
     }
     return '';

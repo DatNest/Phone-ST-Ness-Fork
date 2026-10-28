@@ -1,7 +1,7 @@
 import { registerPhoneSettings } from './phone-settings.js';
 
 import { eventSource, event_types, saveSettingsDebounced, saveChatConditional } from '../../../../script.js';
-import { getSettings, getMeta, saveMeta, GP_VERSION, invalidateChatCache, factoryReset, wipePhoneTraces, captureRoleplayOutgoing, setPhoneQuietMode } from './state.js';
+import { getSettings, getMeta, saveMeta, GP_VERSION, invalidateChatCache, invalidateStoryClockCache, getRpDateTime, factoryReset, wipePhoneTraces, captureRoleplayOutgoing, setPhoneQuietMode } from './state.js';
 import { updatePhoneInjection } from './prompts.js';
 import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, closePhone, applySkin, applyWallpaper, applyChatHiding, toast, notifyBankReminders, notifyDeliveries, deliverScamSms } from './ui.js';
 import { harvestSocialTags, setUserHandle, getUserHandle, listIigProfiles, listIigStyles, listImageBuckets, currentExtModel, stripFakeJournal } from './social.js';
@@ -67,6 +67,11 @@ function setupSettingsPanel() {
                 <label class="gp-settings-field gp-settings-wide"><span>Профиль генерации телефона</span><span class="gp-settings-control-row"><select id="gp-set-profile" class="text_pole"></select><button class="menu_button gp-settings-icon-button" id="gp-profile-test" type="button" title="Проверить профиль (маленький запрос)" aria-label="Проверить профиль (маленький запрос)"><i class="fa-solid fa-plug-circle-check"></i></button></span><small>SMS, Direct, звонки и соцсети. Без выбранного профиля — текущий API.</small></label>
                 <label class="gp-settings-field"><span>Контекст соцсетей</span><select id="gp-set-ctxmode" class="text_pole"><option value="rich" ${s.socialContextMode !== 'lite' ? 'selected' : ''}>История + лорбук + карточка бота</option><option value="lite" ${s.socialContextMode === 'lite' ? 'selected' : ''}>Только срез истории</option></select><small>SMS, Direct и звонки всегда получают карточку, лорбук и историю ролевой. Чужие переписки исключены.</small></label>
                 <label class="gp-settings-field gp-settings-wide"><span>Ролевая с нарратором</span><span class="gp-settings-checks"><label><input type="checkbox" id="gp-set-narrator" ${getMeta().narratorMode ? 'checked' : ''}><span>Мультиперсонажный режим (для этого чата)</span></label></span><small>Карточка описывает целый мир. Телефон выбирает действующих лиц по истории, карточке и лорбуку, а Narrator не становится аккаунтом. Записи об аккаунтах не создаются автоматически.</small></label>
+                <div class="gp-settings-wide gp-story-clock-settings">
+                    <label class="gp-settings-field gp-settings-wide"><span>Дата и время ролевой (для этого чата)</span><select id="gp-set-story-clock-mode" class="text_pole"><option value="auto">Автоматически из ролевой / календаря</option><option value="manual">Вручную — зафиксировать</option></select><small>Если источник временно исчез, сохраняется последняя достоверная отметка. Реальная дата устройства не подставляется.</small></label>
+                    <div class="gp-settings-control-row"><input type="date" id="gp-set-story-date" class="text_pole" aria-label="Игровая дата"><input type="time" id="gp-set-story-time" class="text_pole" aria-label="Игровое время"><button type="button" class="menu_button" id="gp-set-story-clock-save">Сохранить дату</button></div>
+                    <small id="gp-story-clock-status" class="gp-settings-wide"></small>
+                </div>
                 <label class="gp-settings-field"><span>Твой ник (@)</span><input type="text" id="gp-set-handle" class="text_pole" maxlength="21" placeholder="авто из имени"></label>
                 <label class="gp-settings-field"><span>Узнать автора анонимки</span><input type="number" id="gp-set-anonprice" class="text_pole gp-settings-number" min="0" step="100" value="${Number(s.anonRevealPrice) || 2500}"><small>цена первого имени, дальше растёт</small></label>
                 <div class="gp-settings-checks gp-settings-wide">
@@ -519,6 +524,34 @@ function setupSettingsPanel() {
         catch(e){toast('Ошибка импорта: '+String(e.message),'fa-circle-exclamation');}
     });
     $('#gp-social-prompts-reset').on('click',()=>{if(!confirm('Вернуть стандартные промпты соцсетей?'))return;getSettings().socialPromptOverrides={};saveSettingsDebounced();populateSocialPrompts();toast('Стандартные промпты восстановлены','fa-check');});
+    const storyClockElements = () => ({mode:document.getElementById('gp-set-story-clock-mode'),date:document.getElementById('gp-set-story-date'),time:document.getElementById('gp-set-story-time'),status:document.getElementById('gp-story-clock-status')});
+    const refreshStoryClockForm = () => {
+        const {mode,date,time,status} = storyClockElements(); if (!mode || !date || !time) return;
+        const meta=getMeta(),manual=meta.storyClockManual||{};
+        const manualValid = Number.isInteger(Number(manual.year)) && Number(manual.year)>0;
+        mode.value=meta.storyClockMode==='manual'?'manual':'auto';
+        if (manualValid) {
+            date.value=`${String(manual.year).padStart(4,'0')}-${String(manual.month).padStart(2,'0')}-${String(manual.day).padStart(2,'0')}`;
+            time.value=manual.hours!==undefined ? `${String(manual.hours).padStart(2,'0')}:${String(manual.minutes||0).padStart(2,'0')}` : '';
+        } else { date.value='';time.value=''; }
+        if(status){const dt=getRpDateTime();status.textContent=dt?`Сейчас: ${String(dt.day).padStart(2,'0')}.${String(dt.month).padStart(2,'0')}.${dt.year}${dt.hours===undefined?'':` ${String(dt.hours).padStart(2,'0')}:${String(dt.minutes).padStart(2,'0')}`}${mode.value==='manual'?' (вручную)':''}`:'Сюжетная дата пока не найдена — реальная не подставляется';}
+    };
+    $('#gp-set-story-clock-mode').on('change', function(){
+        const meta=getMeta();
+        if(this.value==='manual' && !meta.storyClockManual){this.value='auto';toast('Сначала укажи дату и время и нажми «Сохранить дату»','fa-circle-info');return;}
+        meta.storyClockMode=this.value==='manual'?'manual':'auto';saveMeta();invalidateStoryClockCache();refreshStoryClockForm();if(isPhoneOpen())render();
+    });
+    $('#gp-set-story-clock-save').on('click',function(){
+        const {date,time}=storyClockElements();
+        const match=String(date?.value||'').match(/^(\d{4})-(\d{2})-(\d{2})$/),hm=String(time?.value||'').match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+        if(!match||!hm){toast('Укажи полную игровую дату и время','fa-circle-exclamation');return;}
+        const [year,month,day]=match.slice(1).map(Number);
+        const checked=new Date(year,month-1,day);
+        if(checked.getFullYear()!==year||checked.getMonth()!==month-1||checked.getDate()!==day){toast('Неверная игровая дата','fa-circle-exclamation');return;}
+        const meta=getMeta();meta.storyClockManual={year,month,day,hours:Number(hm[1]),minutes:Number(hm[2])};meta.storyClockMode='manual';
+        saveMeta();invalidateStoryClockCache();refreshStoryClockForm();if(isPhoneOpen())render();toast('Игровая дата сохранена только для этого чата','fa-check');
+    });
+    refreshStoryClockForm();
     $('#gp-set-narrator').on('change', function () {
         getMeta().narratorMode = this.checked;
         saveMeta();
@@ -696,6 +729,7 @@ jQuery(async () => {
                     applyChatHiding();
                     // Ник юзера per-chat — обновляем поле в настройках
                     try { $('#gp-set-handle').val(getUserHandle().replace(/^@/, '')); } catch (e) { /* ignore */ }
+                    try { refreshStoryClockForm(); invalidateStoryClockCache(); } catch (e) { /* ignore */ }
                     if (isPhoneOpen()) render();
                 }, 150);
             });

@@ -41,9 +41,9 @@ function imageUrl(value){
     return text;
 }
 function clockText(){
-    const rp=getRpDateTime(),now=new Date(),date=rp?new Date(rp.year,rp.month-1,rp.day):now;
-    return {time:String(rp?.hours??now.getHours()).padStart(2,'0')+':'+String(rp?.minutes??now.getMinutes()).padStart(2,'0'),
-        date:DAYS_I18N[lang()][date.getDay()]+', '+date.getDate()+' '+MONTHS_I18N[lang()][date.getMonth()]};
+    const rp=getRpDateTime(),date=rp?new Date(rp.year,rp.month-1,rp.day):null;
+    return {time:rp?.hours===undefined?'--:--':String(rp.hours).padStart(2,'0')+':'+String(rp.minutes).padStart(2,'0'),
+        date:date?DAYS_I18N[lang()][date.getDay()]+', '+date.getDate()+' '+MONTHS_I18N[lang()][date.getMonth()]:L('Дата сюжета не установлена','Story date unknown')};
 }
 export function editLockAppearance(screen,api){
     const root=getMeta(),draft=lockAppearance(),text=clockText();let objectUrl='',busy=false,upload=null;

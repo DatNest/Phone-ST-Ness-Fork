@@ -430,7 +430,9 @@ let _bankReminded = new Set();
 export function notifyBankReminders() {
     if (!isPhoneAppInstalled('bank') || !getSettings().isEnabled) return;
     try {
-        const ym = (getRpDateTime() ? `${getRpDateTime().year}-${getRpDateTime().month}` : new Date().toISOString().slice(0, 7));
+        const rp = getRpDateTime();
+        if (!rp) return; // Without an RP date, do not claim bills are due today.
+        const ym = `${rp.year}-${rp.month}`;
         for (const r of getBankReminders()) {
             const key = r.kind + r.id + ':' + ym;
             if (_bankReminded.has(key)) continue;
@@ -792,14 +794,13 @@ function tickClock() {
     const rpDt = getRpDateTime();
     const el = document.getElementById('gp-clock');
     if (el) {
-        // RP-время если есть, иначе реальное
-        const h = rpDt?.hours ?? new Date().getHours();
-        const m = rpDt?.minutes ?? new Date().getMinutes();
-        el.textContent = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+        const known = rpDt?.hours !== undefined;
+        el.textContent = known ? `${String(rpDt.hours).padStart(2, '0')}:${String(rpDt.minutes).padStart(2, '0')}` : '--:--';
     }
     const homeClock = document.querySelector('#gp-screen .gp-home-clock');
-    document.querySelectorAll('#gp-screen .gp-lock-clock').forEach(clock=>{clock.textContent=String(rpDt?.hours??new Date().getHours()).padStart(2,'0')+':'+String(rpDt?.minutes??new Date().getMinutes()).padStart(2,'0');});
-    if (homeClock) { const h = rpDt?.hours ?? new Date().getHours(); const m = rpDt?.minutes ?? new Date().getMinutes(); homeClock.textContent = String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0'); }
+    const storyTime = rpDt?.hours !== undefined ? `${String(rpDt.hours).padStart(2,'0')}:${String(rpDt.minutes).padStart(2,'0')}` : '--:--';
+    document.querySelectorAll('#gp-screen .gp-lock-clock').forEach(clock=>{clock.textContent=storyTime;});
+    if (homeClock) homeClock.textContent=storyTime;
     const rp = document.getElementById('gp-rpdate');
     if (rp) {
         rp.textContent = rpDt?.label || '';
@@ -1355,17 +1356,17 @@ function renderLock(screen) {
     const d = new Date();
     const DAYS = DAYS_I18N[lang()];
     const MONTHS = MONTHS_I18N[lang()];
-    const h = rpDt?.hours ?? d.getHours();
-    const mi = rpDt?.minutes ?? d.getMinutes();
+    const h = rpDt?.hours;
+    const mi = rpDt?.minutes;
     const dateStr = rpDt
         ? `${DAYS[new Date(rpDt.year, rpDt.month - 1, rpDt.day).getDay()]}, ${rpDt.day} ${MONTHS[rpDt.month - 1]}`
-        : `${DAYS[d.getDay()]}, ${d.getDate()} ${MONTHS[d.getMonth()]}`;
+        : L('Дата сюжета не установлена','Story date unknown');
     const notes = lockNotifications();
 
     screen.innerHTML = `
         <div class="gp-lock" id="gp-lock">
             <div class="gp-lock-top">
-                <div class="gp-lock-clock">${String(h).padStart(2, '0')}:${String(mi).padStart(2, '0')}</div>
+                <div class="gp-lock-clock">${h === undefined ? '--:--' : `${String(h).padStart(2, '0')}:${String(mi).padStart(2, '0')}`}</div>
                 <div class="gp-lock-date">${esc(dateStr)}</div>
             </div>
             <div class="gp-lock-notes">
@@ -1416,21 +1417,21 @@ function renderHome(screen) {
     const DAYS = DAYS_I18N[lang()];
     const MONTHS = MONTHS_I18N[lang()];
 
-    // RP-дата/время если доступно, иначе реальные
-    const clockH = rpDt?.hours ?? d.getHours();
-    const clockM = rpDt?.minutes ?? d.getMinutes();
+    // RP date only; a missing story clock must never silently show device time.
+    const clockH = rpDt?.hours;
+    const clockM = rpDt?.minutes;
     let dateStr;
     if (rpDt) {
         // Для RP-даты вычисляем день недели через Date
         const rpDate = new Date(rpDt.year, rpDt.month - 1, rpDt.day);
         dateStr = `${DAYS[rpDate.getDay()]}, ${rpDt.day} ${MONTHS[rpDt.month - 1]}`;
     } else {
-        dateStr = `${DAYS[d.getDay()]}, ${d.getDate()} ${MONTHS[d.getMonth()]}`;
+        dateStr = L('Дата сюжета не установлена','Story date unknown');
     }
 
     screen.innerHTML = `
         <div class="gp-home">
-            <div class="gp-home-clock">${String(clockH).padStart(2, '0')}:${String(clockM).padStart(2, '0')}</div>
+            <div class="gp-home-clock">${clockH === undefined ? '--:--' : `${String(clockH).padStart(2, '0')}:${String(clockM).padStart(2, '0')}`}</div>
             <div class="gp-home-date">${dateStr}</div>
             <div class="gp-home-grid">
                 <div class="gp-app" data-app="list">
@@ -5685,6 +5686,11 @@ function renderPlans(screen) {
     currentScreen = 'calendar';
     if(_planRoot!==getMeta()){_planRoot=getMeta();_planDay='';_planMonth='';}
     const today = rpToday();
+    if (!today) {
+        setHtmlKeepScroll(screen, '.gp-notes-scroll', `<div class="gp-header gp-thread-header"><button class="gp-iconbtn" id="gp-back">${ic('fa-chevron-left')}</button><div class="gp-title gp-title-app gp-notes-title">Календарь</div></div><div class="gp-notes-scroll"><div class="gp-cal-empty" style="padding:24px">Игровая дата не установлена. Открой настройки телефона → «Модель и контекст» и укажи дату ролевой.</div></div>`);
+        screen.querySelector('#gp-back')?.addEventListener('click', () => goto('home'));
+        return;
+    }
     if (!_planDay) _planDay = today;
     if (!_planMonth) _planMonth = monthOf(_planDay);
     const cells = monthGrid(_planMonth);
@@ -7081,8 +7087,7 @@ function toastClock() {
         const d = getRpDateTime();
         if (d && d.hours !== undefined) return `${String(d.hours).padStart(2, '0')}:${String(d.minutes || 0).padStart(2, '0')}`;
     } catch (e) { /* ignore */ }
-    const n = new Date();
-    return `${String(n.getHours()).padStart(2, '0')}:${String(n.getMinutes()).padStart(2, '0')}`;
+    return '--:--';
 }
 
 // Выбранный стиль. Старые значения (island/glass/bar/accent) больше не

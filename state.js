@@ -12,7 +12,7 @@ import { isPhoneOnlyClockMessage, extractPresentRpClock, currentCalendarDateLine
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '2.55.2-ness.6';
+export const GP_VERSION = '2.55.3-ness.7';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -1010,9 +1010,8 @@ export function fmtTime(date) {
     // «сегодня» = текущая RP-дата
     const rpDt = getRpDateTime();
     const now = rpDt
-        ? new Date(rpDt.year, rpDt.month - 1, rpDt.day)
-        : new Date();
-    const sameDay = date.getFullYear() === now.getFullYear()
+        ? new Date(rpDt.year, rpDt.month - 1, rpDt.day) : null;
+    const sameDay = !!now && date.getFullYear() === now.getFullYear()
         && date.getMonth() === now.getMonth()
         && date.getDate() === now.getDate();
     if (sameDay) {
@@ -1217,16 +1216,37 @@ function calendarInjectText() {
 // символы календарь-инжекта), чтобы не парсить на каждый tick.
 let _rpDateCache = null;
 let _rpDateSig = null;
+// Story time belongs to the chat. A missing clock is NOT the device clock.
+export function invalidateStoryClockCache() { _rpDateCache = null; _rpDateSig = null; _rpOffsetMs = null; _rpOffsetSig = null; }
+function validatedStoryClock(source) {
+    if (!source || typeof source !== 'object') return null;
+    const year = Number(source.year), month = Number(source.month), day = Number(source.day);
+    if (!Number.isInteger(year) || year < 1 || year > 9999 || !Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(day) || day < 1 || day > 31) return null;
+    const check = new Date(year, month - 1, day);
+    if (check.getFullYear() !== year || check.getMonth() !== month - 1 || check.getDate() !== day) return null;
+    const result = {year, month, day, label: `${String(day).padStart(2, '0')}.${String(month).padStart(2, '0')}`};
+    if (source.hours !== undefined && source.minutes !== undefined) {
+        const hours = Number(source.hours), minutes = Number(source.minutes);
+        if (!Number.isInteger(hours) || hours < 0 || hours > 23 || !Number.isInteger(minutes) || minutes < 0 || minutes > 59) return null;
+        result.hours = hours; result.minutes = minutes;
+    }
+    return result;
+}
 export function getRpDateTime() {
     try {
-        const chat = SillyTavern.getContext()?.chat || [];
+        const ctx = SillyTavern.getContext();
+        const chat = ctx?.chat || [];
+        const clockMeta = chat_metadata?.[META_KEY] || {};
+        const manual = validatedStoryClock(clockMeta.storyClockManual);
+        if (clockMeta.storyClockMode === 'manual' && manual) return {...manual, source: 'manual'};
+        const lastKnown = validatedStoryClock(clockMeta.storyClockLastKnown);
         const calText = calendarInjectText();
         let chatSig = '';
         for (let i = Math.max(0, chat.length - 20); i < chat.length; i++) {
             const m = chat[i]?.mes || '';
             chatSig += m.length + '|' + m.slice(0, 50) + '|' + m.slice(-50) + '|';
         }
-        const sig = `${chat.length}|${calText.length}|${calText.slice(0, 100)}|${calText.slice(-100)}|${chatSig}`;
+        const sig = `${ctx?.chatId || ''}|${chat.length}|${calText.length}|${calText.slice(0, 100)}|${calText.slice(-100)}|${chatSig}|${JSON.stringify(lastKnown)}`;
         if (sig === _rpDateSig) return _rpDateCache;
         _rpDateSig = sig;
 
@@ -1298,24 +1318,27 @@ export function getRpDateTime() {
             || calCurrentClock || recentClock;
         const full = (recentDateIndex >= freshBoundary ? recentDate : null)
             || calCurrentDate || recentDate;
-        let res = full ? { ...full } : null;
-        if (res && clock) {
+        // Preserve the last legitimate RP anchor in THIS chat if an extension
+        // temporarily stops supplying one, or after a long SMS-only exchange.
+        // Never manufacture an RP calendar date from new Date().
+        const detected = validatedStoryClock(full) || null;
+        let res = detected ? {...detected} : (lastKnown ? {...lastKnown} : null);
+        if (res && clock && clock.hours !== undefined) {
             res.hours = clock.hours;
             res.minutes = clock.minutes;
-        } else if (!res && clock) {
-            // Keep the existing API's date container, but mark it as synthetic.
-            const now = new Date();
-            res = {
-                day: now.getDate(), month: now.getMonth() + 1, year: now.getFullYear(),
-                hours: clock.hours, minutes: clock.minutes,
-                label: `${String(now.getDate()).padStart(2, '0')}.${String(now.getMonth() + 1).padStart(2, '0')}`,
-                timeOnly: true,
-            };
         }
-        if (res && Number.isFinite(res.day) && Number.isFinite(res.month)) {
-            res.label = `${String(res.day).padStart(2, '0')}.${String(res.month).padStart(2, '0')}`;
+        res = validatedStoryClock(res);
+        if (res && (detected || (clock && lastKnown))) {
+            const stored = JSON.stringify(lastKnown);
+            const next = JSON.stringify(res);
+            if (next !== stored) {
+                clockMeta.storyClockLastKnown = {day: res.day, month: res.month, year: res.year,
+                    ...(res.hours !== undefined ? {hours:res.hours,minutes:res.minutes} : {})};
+                if (chat_metadata?.[META_KEY] === clockMeta) {
+                    try { saveMetadataDebounced(); } catch (_) { /* not ready */ }
+                }
+            }
         }
-
         _rpDateCache = res || null;
         return _rpDateCache;
     } catch (e) { _rpDateCache = null; return null; }

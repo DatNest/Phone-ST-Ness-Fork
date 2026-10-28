@@ -69,3 +69,13 @@ AI-generated Twitter replies, Twitter/Instagram feed posts, Instagram/OnlyFans c
 - Calendar injections must explicitly identify CURRENT date/time; GlassPhone's own injected prompt is excluded from calendar source discovery.
 - The standalone parseAnyDateTime helper remains unchanged for interpreting real appointments and calendar plans.
 - No phone metadata, contacts, posts, avatars or prompt overrides are reset by this patch.
+
+## Ness 2.55.3 — Strict per-chat RP date (no real-clock fallback)
+- A date/time recognized from the RP or calendar is saved as a per-chat last-known snapshot; a temporary missing injection does not replace it with the device clock.
+- A time-only anchor without a known RP date no longer fabricates the date from new Date().
+- When no RP clock exists, phone home/lock clock shows `--:--` and date shows `Дата сюжета не установлена`, not device time.
+- Settings → Model and context now allows setting a manual YYYY-MM-DD HH:MM clock for the CURRENT chat; automatic mode remains the default.
+- Manual clock takes precedence until Auto is chosen again. The setting is per-chat; other chats retain their separate values.
+- Russian present-date parsing is fixed, and the cache signature now includes the chat identity.
+- Internal operational timestamps (file IDs, timeouts, update ordering) continue to use real time; this patch is about RP date display and source selection.
+- Previous No Auto User / accounts / images / social prompt editor are unchanged.

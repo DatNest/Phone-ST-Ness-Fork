@@ -323,8 +323,12 @@ export function timeAgo(ts, rpAt = null) {
     if (Number.isFinite(rpAt) && rp && !rp.timeOnly && rp.hours !== undefined) {
         const now = new Date(rp.year, rp.month-1, rp.day, rp.hours, rp.minutes || 0).getTime();
         elapsed = Math.max(0, now - rpAt);
-    } else {
+    } else if (rp) {
+        // Legacy entries have real timestamps; keep existing relative behavior only
+        // while a valid RP date is present (new entries have rpAt).
         elapsed = Date.now() - ts;
+    } else {
+        return ''; // Device time is not a replacement for unknown story time.
     }
     const mins = Math.max(0, Math.floor(elapsed / 60000));
     if (mins < 1) return 'сейчас';
