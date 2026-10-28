@@ -83,15 +83,17 @@ export function getSocial() {
 export function getTweets() { return getSocial().tweets; }
 export function getIgPosts() { return getSocial().igPosts; }
 
-// ── Инста-сторис: живут 24 часа реального времени, потом гаснут ──
+// Instagram stories expire only when explicit RP posts establish that 24h passed.
 export function getStories() {
     const s = getSocial();
     if (!Array.isArray(s.stories)) s.stories = [];
     return s.stories;
 }
 export function activeStories() {
-    const now = Date.now();
-    return getStories().filter(st => st && now - (st.time || 0) < 24 * 3600 * 1000);
+    const rp=getRpDateTime();
+    const now=Number.isInteger(rp?.year) && rp?.hours!==undefined
+        ? new Date(rp.year,rp.month-1,rp.day,rp.hours,rp.minutes).getTime() : null;
+    return getStories().filter(st => st && (now===null || !Number.isFinite(st.rpAt) || (now-st.rpAt)<24*3600*1000));
 }
 export function addStory({ image = null, imgDesc = '', caption = '' }) {
     const stories = getStories();
@@ -102,7 +104,8 @@ export function addStory({ image = null, imgDesc = '', caption = '' }) {
         image,
         imgDesc: String(imgDesc || '').slice(0, 300),
         caption: String(caption || '').slice(0, 300),
-        time: Date.now(),
+        time: Date.now(), // internal ordering only; never used as story clock
+        rpAt: storyTimestampFromReal(Date.now()),
         views: 0,
     };
     stories.unshift(story);
@@ -188,7 +191,8 @@ Format: [{"author":"Имя","photo":"...","caption":"..."}]`;
             image: null,
             imgDesc: String(it.photo).slice(0, 300),
             caption: String(it.caption || '').slice(0, 200),
-            time: Date.now() - Math.floor(Math.random() * 3 * 3600 * 1000),
+            time: Date.now(), // internal order only
+            rpAt: storyTimestampFromReal(Date.now()),
             views: 0,
         });
         added++;
@@ -223,7 +227,10 @@ export function toggleStoryLike(story) {
 export function bumpStoryViews(story) {
     if (!story) return 0;
     const followers = getSocial().socialProfiles?.instagram?.followers || 40;
-    const ageMin = (Date.now() - (story.time || Date.now())) / 60000;
+    const rp=getRpDateTime();
+    if (!Number.isFinite(story.rpAt) || !Number.isInteger(rp?.year) || rp?.hours===undefined) return story.views||0;
+    const now=new Date(rp.year,rp.month-1,rp.day,rp.hours,rp.minutes).getTime();
+    const ageMin=Math.max(0,(now-story.rpAt)/60000);
     const target = Math.round(Math.min(followers * 0.65, 2 + followers * 0.65 * Math.min(1, ageMin / 240)));
     if (target > (story.views || 0)) {
         story.views = target;
@@ -312,8 +319,7 @@ export function getUserHandle() {
 function storyTimestampFromReal(realMs) {
     const rp = getRpDateTime();
     if (!rp || rp.timeOnly || rp.hours === undefined) return null;
-    const storyNow = new Date(rp.year, rp.month-1, rp.day, rp.hours, rp.minutes || 0).getTime();
-    return storyNow - (Date.now() - Number(realMs));
+    return new Date(rp.year, rp.month-1, rp.day, rp.hours, rp.minutes || 0).getTime();
 }
 
 export function timeAgo(ts, rpAt = null) {
@@ -323,10 +329,6 @@ export function timeAgo(ts, rpAt = null) {
     if (Number.isFinite(rpAt) && rp && !rp.timeOnly && rp.hours !== undefined) {
         const now = new Date(rp.year, rp.month-1, rp.day, rp.hours, rp.minutes || 0).getTime();
         elapsed = Math.max(0, now - rpAt);
-    } else if (rp) {
-        // Legacy entries have real timestamps; keep existing relative behavior only
-        // while a valid RP date is present (new entries have rpAt).
-        elapsed = Date.now() - ts;
     } else {
         return ''; // Device time is not a replacement for unknown story time.
     }
@@ -1683,8 +1685,10 @@ async function taskHeader(what, { publicOnly = false, contactNames = [], brief =
     const storyClock = getRpDateTime();
     if (storyClock && !storyClock.timeOnly) {
         blocks.push(`CURRENT IN-STORY CLOCK (AUTHORITATIVE): ${String(storyClock.day).padStart(2,'0')}.${String(storyClock.month).padStart(2,'0')}.${storyClock.year}` + (storyClock.hours === undefined ? '' : ` ${String(storyClock.hours).padStart(2,'0')}:${String(storyClock.minutes || 0).padStart(2,'0')}`) + '. This is story time; device date is irrelevant. Do not imply later dates or times unless already established.');
+    } else if (storyClock?.timeOnly) {
+        blocks.push(`CURRENT IN-STORY TIME (RP POSTS ONLY): ${String(storyClock.hours).padStart(2,'0')}:${String(storyClock.minutes).padStart(2,'0')}. Calendar date unknown. Never infer it.`);
     } else {
-        blocks.push('CURRENT IN-STORY CLOCK: not reliably available. Do not invent a specific current calendar date, time, season or elapsed time from the device clock. Follow the latest explicit scene facts.');
+        blocks.push('CURRENT IN-STORY CLOCK: no explicit date/time found in RP posts. Leave missing values unknown; never substitute device time, calendar data or a saved value.');
     }
     if (rich) {
         const context = await richContext({ publicOnly, contactNames });

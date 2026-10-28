@@ -722,8 +722,7 @@ function syncPhoneViewOwner() {
 
 export function openPhone(threadKey = null) {
     syncPhoneViewOwner();
-    // Re-read the CURRENT chat and current calendar injections on every open.
-    // Never use the device clock as fallback. Manual per-chat clocks still win.
+    // On every open, read the RP posts again; never use calendar/device/old stored time.
     invalidateStoryClockCache();
     getRpDateTime();
     createPhone();
@@ -1357,12 +1356,11 @@ export function lockUnreadCount() {
 function renderLock(screen) {
     currentScreen = 'lock';
     const rpDt = getRpDateTime();
-    const d = new Date();
     const DAYS = DAYS_I18N[lang()];
     const MONTHS = MONTHS_I18N[lang()];
     const h = rpDt?.hours;
     const mi = rpDt?.minutes;
-    const dateStr = rpDt
+    const dateStr = Number.isInteger(rpDt?.year)
         ? `${DAYS[new Date(rpDt.year, rpDt.month - 1, rpDt.day).getDay()]}, ${rpDt.day} ${MONTHS[rpDt.month - 1]}`
         : L('Дата сюжета не установлена','Story date unknown');
     const notes = lockNotifications();
@@ -1417,7 +1415,6 @@ function renderHome(screen) {
     const unread = getTotalUnread();
     const activeStoryEvent = systemsOn() ? getSystemsView().storyEvents.active : null;
     const rpDt = getRpDateTime();
-    const d = new Date();
     const DAYS = DAYS_I18N[lang()];
     const MONTHS = MONTHS_I18N[lang()];
 
@@ -1425,7 +1422,7 @@ function renderHome(screen) {
     const clockH = rpDt?.hours;
     const clockM = rpDt?.minutes;
     let dateStr;
-    if (rpDt) {
+    if (Number.isInteger(rpDt?.year)) {
         // Для RP-даты вычисляем день недели через Date
         const rpDate = new Date(rpDt.year, rpDt.month - 1, rpDt.day);
         dateStr = `${DAYS[rpDate.getDay()]}, ${rpDt.day} ${MONTHS[rpDt.month - 1]}`;
@@ -2199,10 +2196,8 @@ function renderThread(screen) {
                 lastDay = day;
                 // m.time уже в RP-шкале — сравниваем с RP «сейчас»
                 const rpDt = getRpDateTime();
-                const now = rpDt
-                    ? new Date(rpDt.year, rpDt.month - 1, rpDt.day)
-                    : new Date();
-                const isToday = now.getFullYear() === m.time.getFullYear() && now.getMonth() === m.time.getMonth() && now.getDate() === m.time.getDate();
+                const now = Number.isInteger(rpDt?.year) ? new Date(rpDt.year, rpDt.month - 1, rpDt.day) : null;
+                const isToday = !!now && now.getFullYear() === m.time.getFullYear() && now.getMonth() === m.time.getMonth() && now.getDate() === m.time.getDate();
                 const label = isToday ? 'Сегодня' : `${String(m.time.getDate()).padStart(2, '0')}.${String(m.time.getMonth() + 1).padStart(2, '0')}`;
                 bubbles += `<div class="gp-day"><span>${label}</span></div>`;
             }
@@ -3665,8 +3660,11 @@ function renderIgStory(screen) {
     const authorName = isMine ? getUserName() : (st.author || '?');
     const authorAva = socialAccountButton({author:authorName,ak:isMine?'user':st.ak},'gp-avatar gp-avatar-sm');
     const views = isMine ? bumpStoryViews(st) : 0;
-    const ageMin = Math.max(1, Math.round((Date.now() - st.time) / 60000));
-    const ageLabel = ageMin < 60 ? `${ageMin} м` : `${Math.round(ageMin / 60)} ч`;
+    const rpForStory=getRpDateTime();
+    const rpNow=Number.isInteger(rpForStory?.year) && rpForStory?.hours!==undefined
+        ? new Date(rpForStory.year,rpForStory.month-1,rpForStory.day,rpForStory.hours,rpForStory.minutes).getTime() : null;
+    const ageMin=rpNow!==null && Number.isFinite(st.rpAt) ? Math.max(0,Math.floor((rpNow-st.rpAt)/60000)) : null;
+    const ageLabel=ageMin===null ? '' : ageMin<60 ? `${ageMin} м` : `${Math.floor(ageMin/60)} ч`;
     const media = st.image
         ? `<img class="gp-igst-media" src="${esc(st.image)}" alt="" data-zoom>`
         : `<div class="gp-igst-media gp-igst-media-gen" style="${avatarStyle('story' + st.imgDesc)}"><span>${ic('fa-image')}</span><i>${esc(st.imgDesc)}</i></div>`;
@@ -3676,7 +3674,7 @@ function renderIgStory(screen) {
             <div class="gp-igst-top">
                 ${authorAva}
                 <b>${esc(authorName)}</b>
-                <span>${esc(ageLabel)}</span>
+                ${ageLabel?`<span>${esc(ageLabel)}</span>`:''}
                 ${st.imgDesc ? `<button class="gp-iconbtn" id="gp-st-draw2" title="${st.image ? 'Перегенерировать фото' : 'Нарисовать'}" ${_storyGenBusy ? 'disabled' : ''}>${ic(_storyGenBusy ? 'fa-spinner fa-spin' : (st.image ? 'fa-rotate-right' : 'fa-wand-magic-sparkles'))}</button>` : ''}
                 ${isMine ? `<button class="gp-iconbtn gp-danger" id="gp-st-del" title="Удалить сторис">${ic('fa-trash-can')}</button>` : ''}
                 <button class="gp-iconbtn" id="gp-st-close">${ic('fa-xmark')}</button>
@@ -6477,7 +6475,7 @@ function renderChanPost(screen) {
         const quote = c.replyTo
             ? `<div class="gp-chan-quote"><b>${esc(c.replyTo)}</b><span>${esc(String(quoted?.text || 'комментарий').slice(0, 70))}</span></div>`
             : '';
-        const foot = `${esc(fmtTime(new Date(c.ts)))}${mine ? '' : `<button data-chanreply="${esc(c.author)}">Ответить</button>`}<button class="gp-danger" data-chancdel="${esc(c.id)}">Удалить</button>`;
+        const foot = `${esc('')}${mine ? '' : `<button data-chanreply="${esc(c.author)}">Ответить</button>`}<button class="gp-danger" data-chancdel="${esc(c.id)}">Удалить</button>`;
         return `
         <div class="gp-bubble-wrap ${mine ? 'gp-out' : 'gp-in'}">
             <div class="gp-bubble">${sender}${quote}${esc(c.text)}</div>

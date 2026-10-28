@@ -17,17 +17,12 @@ export function parkPhoneSettings(){
 }
 function refreshClockControls(){
     if(!panel)return;
-    const meta=getMeta(),mode=panel.querySelector('#gp-set-story-clock-mode'),date=panel.querySelector('#gp-set-story-date'),time=panel.querySelector('#gp-set-story-time'),status=panel.querySelector('#gp-story-clock-status');
-    if(!mode)return;
-    const manual=meta.storyClockManual||{};
-    mode.value=meta.storyClockMode==='manual'?'manual':'auto';
-    if(date)date.value=manual.year?`${String(manual.year).padStart(4,'0')}-${String(manual.month).padStart(2,'0')}-${String(manual.day).padStart(2,'0')}`:'';
-    if(time)time.value=manual.hours!==undefined?`${String(manual.hours).padStart(2,'0')}:${String(manual.minutes||0).padStart(2,'0')}`:'';
-    if(status){
-        const dt=getRpDateTime();
-        const suffix=mode.value==='manual'?' (вручную)':dt?.source==='lastKnown'?' (последняя сохранённая отметка)':'';
-        status.textContent=dt?`Сейчас: ${String(dt.day).padStart(2,'0')}.${String(dt.month).padStart(2,'0')}.${dt.year}${dt.hours===undefined?'':` ${String(dt.hours).padStart(2,'0')}:${String(dt.minutes).padStart(2,'0')}`}${suffix}`:'Сюжетная дата пока не найдена';
-    }
+    const status=panel.querySelector('#gp-story-clock-status');
+    if(!status)return;
+    const dt=getRpDateTime();
+    const date=Number.isInteger(dt?.year)?`${String(dt.day).padStart(2,'0')}.${String(dt.month).padStart(2,'0')}.${dt.year}`:'не найдена';
+    const time=dt?.hours!==undefined?`${String(dt.hours).padStart(2,'0')}:${String(dt.minutes).padStart(2,'0')}`:'не найдено';
+    status.textContent=`Дата из RP-постов: ${date} · Время из RP-постов: ${time}`;
 }
 export function renderPhoneSettings(screen,api){
     const mounted=screen.querySelector('.gp-phone-settings-mount');

@@ -7,12 +7,12 @@ import { saveBase64AsFile } from '../../../utils.js';
 import { readPhoneMessage } from './message-sources.js';
 import { captureRoleplaySms, extractRoleplaySms, hasMixedRoleplaySms } from './roleplay-sms.js';
 import { cleanContactName, contactNameKey, redirectedContactKey, resolveIdentity, repairContactMetadata } from './contact-identity.js';
-import { isPhoneOnlyClockMessage, extractPresentRpClock, currentCalendarDateLine, currentNarrativeDateLine } from './story-clock-guard.js';
+import { isPhoneOnlyClockMessage, extractPresentRpClock, currentNarrativeDateLine } from './story-clock-guard.js';
 
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '2.55.4-ness.8';
+export const GP_VERSION = '2.56.0-ness.9';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -962,54 +962,15 @@ function detectProseNumber(text) {
     return null;
 }
 
-// ── Маппинг реальных дат на RP-шкалу ──
-// Вычисляет offset между реальным «сейчас» и RP «сейчас», сдвигает все даты.
-// Кэшируется на тот же цикл, что и getRpDateTime.
-let _rpOffsetMs = null;
-let _rpOffsetSig = null;
-
-function getRpOffsetMs() {
-    const rpDt = getRpDateTime();
-    if (!rpDt) return 0; // нет RP — offset 0, показываем реальные даты
-    const sig = `${rpDt.day}|${rpDt.month}|${rpDt.year}|${rpDt.hours}|${rpDt.minutes}`;
-    if (sig === _rpOffsetSig && _rpOffsetMs !== null) return _rpOffsetMs;
-    _rpOffsetSig = sig;
-    const realNow = new Date();
-    const rpNow = new Date(
-        rpDt.year, rpDt.month - 1, rpDt.day,
-        rpDt.hours ?? realNow.getHours(),
-        rpDt.minutes ?? realNow.getMinutes(),
-        0, 0,
-    );
-    _rpOffsetMs = rpNow.getTime() - realNow.getTime();
-    return _rpOffsetMs;
-}
-
-/** Преобразует реальную дату в RP-дату (сдвиг на offset) */
-export function realToRpDate(realDate) {
-    if (!realDate) return null;
-    const off = getRpOffsetMs();
-    if (off === 0) return realDate;
-    return new Date(realDate.getTime() + off);
-}
-
-function parseRealDate(sd) {
-    if (typeof sd === 'number') {
-        const d = new Date(sd);
-        if (!isNaN(d.getTime())) return d;
-    } else if (typeof sd === 'string') {
-        const d = new Date(sd);
-        if (!isNaN(d.getTime())) return d;
-    }
-    return null;
-}
+// One rule for the roleplay clock: explicit evidence from RP posts or no time.
+// Real-world timestamps must never be converted into invented RP timestamps.
+export function realToRpDate(_realDate) { return null; }
 
 export function fmtTime(date) {
     if (!date) return '';
-    // date уже в RP-шкале (через parseMsgDate → realToRpDate),
-    // «сегодня» = текущая RP-дата
+    // Timestamp must originate from an explicit RP clock tag in this post.
     const rpDt = getRpDateTime();
-    const now = rpDt
+    const now = Number.isInteger(rpDt?.year)
         ? new Date(rpDt.year, rpDt.month - 1, rpDt.day) : null;
     const sameDay = !!now && date.getFullYear() === now.getFullYear()
         && date.getMonth() === now.getMonth()
@@ -1020,10 +981,7 @@ export function fmtTime(date) {
     return `${String(date.getDate()).padStart(2, '0')}.${String(date.getMonth() + 1).padStart(2, '0')}`;
 }
 
-// ── RP-дата/время: из ЛЮБОГО источника ──
-// Приоритет: (1) инжект календаря (rp-calendar и т.п. — читаем extension_prompts,
-// парсим дату+время из текста), (2) тег Pregnancy [RP_DATE:DD.MM.YYYY],
-// (3) дата/время в прозе последних сообщений. Иначе null → телефон берёт реальное.
+// RP clock facts are read ONLY from RP posts, never a phone message or external source.
 const RP_DATE_RE = /\[RP_DATE[:\s]+\s*(\d{1,2})[.\/](\d{1,2})[.\/](\d{2,4})(?:\s+(\d{1,2}):(\d{2}))?\s*\]/i;
 
 // Метка времени, которую модель ставит в конце ответа. Это самый надёжный
@@ -1189,163 +1147,77 @@ export function extractTemporalContext(text, base = null) {
     return { raw: mentions.join(' | ').slice(0, 300), normalized };
 }
 
-// Собрать текст инжектов календаря (rp-calendar и подобные) из реестра
-// extension_prompts. Ключей календаря мы не знаем — берём ВСЕ инжекты, где
-// есть слова про дату/время/календарь, чтобы не тащить лишнее.
-function calendarInjectText() {
-    try {
-        const ctx = SillyTavern.getContext();
-        const eps = ctx?.extensionPrompts || {};
-        const chunks = [];
-        for (const key of Object.keys(eps)) {
-            // Our own phone directive contains deadlines and example clock tags.
-            // It must never be read back as an independent calendar source.
-            if (key === EXT_NAME || key.startsWith(EXT_NAME + '_')) continue;
-            const val = eps[key]?.value;
-            if (typeof val !== 'string' || !val) continue;
-            const k = key.toLowerCase();
-            const looksCalendar = /calendar|date|time|день|дата|время|clock/i.test(k)
-                || /\b\d{1,2}:\d{2}\b/.test(val) && /(date|дата|day|день|month|месяц|year|год)/i.test(val);
-            if (looksCalendar) chunks.push(val);
-        }
-        return chunks.join('\n');
-    } catch (e) { return ''; }
-}
-
-// Полный парсинг RP-даты/времени. Лёгкий кэш по сигнатуре (длина чата + первые
-// символы календарь-инжекта), чтобы не парсить на каждый tick.
+// Unified RP clock. Reads only roleplay posts; no calendar injection, device clock,
+// manual override, last-known snapshot or inferred passage of time.
 let _rpDateCache = null;
 let _rpDateSig = null;
-// Story time belongs to the chat. A missing clock is NOT the device clock.
-export function invalidateStoryClockCache() { _rpDateCache = null; _rpDateSig = null; _rpOffsetMs = null; _rpOffsetSig = null; }
-function validatedStoryClock(source) {
-    if (!source || typeof source !== 'object') return null;
-    const year = Number(source.year), month = Number(source.month), day = Number(source.day);
-    if (!Number.isInteger(year) || year < 1 || year > 9999 || !Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(day) || day < 1 || day > 31) return null;
-    const check = new Date(year, month - 1, day);
-    if (check.getFullYear() !== year || check.getMonth() !== month - 1 || check.getDate() !== day) return null;
-    const result = {year, month, day, label: `${String(day).padStart(2, '0')}.${String(month).padStart(2, '0')}`};
-    if (source.hours !== undefined && source.minutes !== undefined) {
-        const hours = Number(source.hours), minutes = Number(source.minutes);
-        if (!Number.isInteger(hours) || hours < 0 || hours > 23 || !Number.isInteger(minutes) || minutes < 0 || minutes > 59) return null;
-        result.hours = hours; result.minutes = minutes;
+export function invalidateStoryClockCache() { _rpDateCache = null; _rpDateSig = null; }
+
+function strictDate(value) {
+    if (!value || !Number.isInteger(Number(value.year)) ||
+        !Number.isInteger(Number(value.month)) || !Number.isInteger(Number(value.day))) return null;
+    const year=Number(value.year), month=Number(value.month), day=Number(value.day);
+    if (year<1 || year>9999 || month<1 || month>12 || day<1 || day>31) return null;
+    const date=new Date(0);date.setFullYear(year,month-1,day);
+    if (date.getFullYear()!==year || date.getMonth()!==month-1 || date.getDate()!==day) return null;
+    return {year,month,day,label:`${String(day).padStart(2,'0')}.${String(month).padStart(2,'0')}`};
+}
+function strictTime(value) {
+    const hours=Number(value?.hours),minutes=Number(value?.minutes);
+    if (!Number.isInteger(hours) || !Number.isInteger(minutes) || hours<0 || hours>23 || minutes<0 || minutes>59) return null;
+    return {hours,minutes};
+}
+function evidenceForPost(message) {
+    if (!message?.mes || message.is_system || isPhoneOnlyClockMessage(message)) return {date:null,time:null};
+    const source=stripThink(message.mes);
+    const tag=parseTimeTag(source);
+    if (tag) return {date:strictDate(tag),time:strictTime(tag)};
+    let date=null,time=null;
+    const marker=source.match(RP_DATE_RE);
+    if (marker) {
+        const m=marker;
+        const year=Number(m[3]);
+        date=strictDate({day:Number(m[1]),month:Number(m[2]),year:year<100 ? (year<50?year+2000:year+1900):year});
+        if (m[4]!==undefined) time=strictTime({hours:Number(m[4]),minutes:Number(m[5])});
     }
-    return result;
+    // Only a present-time declaration counts. Appointments and SMS mentions do not.
+    const explicitClock=extractPresentRpClock(source);
+    if (!time && explicitClock) {
+        const match=explicitClock.match(/^(\d{1,2}):([0-5]\d)$/);
+        if (match) time=strictTime({hours:Number(match[1]),minutes:Number(match[2])});
+    }
+    if (!date) {
+        const declaration=currentNarrativeDateLine(source);
+        if (declaration) {
+            const parsed=parseAnyDateTime(declaration);
+            date=strictDate(parsed);
+            // Time on an explicitly CURRENT date/time heading is also current.
+            if (!time && date && parsed?.hours !== undefined)
+                time=strictTime(parsed);
+        }
+    }
+    return {date,time};
 }
 export function getRpDateTime() {
     try {
-        const ctx = SillyTavern.getContext();
-        const chat = ctx?.chat || [];
-        const clockMeta = chat_metadata?.[META_KEY] || {};
-        const manual = validatedStoryClock(clockMeta.storyClockManual);
-        if (clockMeta.storyClockMode === 'manual' && manual) return {...manual, source: 'manual'};
-        const lastKnown = validatedStoryClock(clockMeta.storyClockLastKnown);
-        const calText = calendarInjectText();
-        let chatSig = '';
-        for (let i = Math.max(0, chat.length - 20); i < chat.length; i++) {
-            const m = chat[i]?.mes || '';
-            chatSig += m.length + '|' + m.slice(0, 50) + '|' + m.slice(-50) + '|';
+        const ctx=SillyTavern.getContext();
+        const chat=Array.isArray(ctx?.chat)?ctx.chat:[];
+        // The cache is only a performance optimization. It never stores a fallback
+        // and is forced to rescan when the user presses Refresh or opens the phone.
+        const tail=chat.slice(-5).map(m=>String(m?.mes||'')).join('\u001e');
+        const sig=String(ctx?.chatId||'')+'|'+chat.length+'|'+tail;
+        if (sig===_rpDateSig) return _rpDateCache;
+        let date=null,time=null;
+        for(let i=chat.length-1;i>=0 && (!date||!time);i--){
+            const post=evidenceForPost(chat[i]);
+            if(!date && post.date) date=post.date;
+            if(!time && post.time) time=post.time;
         }
-        const sig = `${ctx?.chatId || ''}|${chat.length}|${calText.length}|${calText.slice(0, 100)}|${calText.slice(-100)}|${chatSig}|${JSON.stringify(lastKnown)}`;
-        if (sig === _rpDateSig) return _rpDateCache;
-        _rpDateSig = sig;
-
-        // IMPORTANT: SMS content may contain a FUTURE time (e.g. "be home by 17:30").
-        // Never promote the first HH:MM in dialogue/phone messages to the RP clock.
-        // Dedicated clock markers and explicit PRESENT-time statements are sources;
-        // plans, deadlines, chat notifications, and ordinary mentions are not.
-        let recentClock = null;
-        let recentDate = null;
-        let recentClockIndex = -1;
-        let recentDateIndex = -1;
-        // Read the latest trusted anchor; phone-only turns cannot move the clock.
-        // Look far enough back to survive a long SMS exchange without forgetting
-        // the last established story time.
-        for (let i = chat.length - 1; i >= Math.max(0, chat.length - 120); i--) {
-            const message = chat[i];
-            if (!message?.mes || message.is_system || isPhoneOnlyClockMessage(message)) continue;
-            const source = stripThink(message.mes);
-            // Explicit story clock tags are authoritative for a regular RP turn.
-            const tagged = parseTimeTag(source);
-            if (tagged) {
-                if (!recentClock) { recentClock = tagged; recentClockIndex = i; }
-                if (!recentDate) { recentDate = tagged; recentDateIndex = i; }
-                if (recentClock && recentDate) break;
-                continue;
-            }
-            // RP_DATE only counts as a date, or time if its own marker has HH:MM.
-            const mark = source.match(RP_DATE_RE);
-            if (mark) {
-                const parsed = parseAnyDateTime(mark[0]);
-                if (parsed && !parsed.timeOnly) {
-                    if (!recentDate) { recentDate = parsed; recentDateIndex = i; }
-                    if (!recentClock && parsed.hours !== undefined) {
-                        recentClock = parsed; recentClockIndex = i;
-                    }
-                }
-            }
-            if (!recentClock) {
-                const present = extractPresentRpClock(source);
-                if (present) { recentClock = parseAnyDateTime(present); recentClockIndex = i; }
-            }
-            if (!recentDate) {
-                const dateStatement = currentNarrativeDateLine(source);
-                if (dateStatement) {
-                    const parsed = parseAnyDateTime(dateStatement);
-                    if (parsed && !parsed.timeOnly) { recentDate = parsed; recentDateIndex = i; }
-                }
-            }
-            if (recentClock && recentDate) break;
-        }
-
-        // Calendar injection is allowed to provide *current* time/date only.
-        // A calendar's future appointments are not current RP time.
-        const calPresent = extractPresentRpClock(calText);
-        const calClock = calPresent ? parseAnyDateTime(calPresent) : null;
-        const calDateLine = currentCalendarDateLine(calText);
-        const calDate = calDateLine ? parseAnyDateTime(calDateLine) : null;
-        const calMark = calText.match(RP_DATE_RE);
-        const calTagged = calMark ? parseAnyDateTime(calMark[0]) : null;
-        // Fresh RP anchors win. When only an OLD RP anchor remains after many
-        // phone messages, the CURRENT calendar injection wins over stale time.
-        const freshBoundary = chat.length - 8;
-        const calCurrentClock = calClock ||
-            (calTagged?.hours !== undefined ? calTagged : null) ||
-            (calDate?.hours !== undefined ? calDate : null);
-        const calCurrentDate = (calDate && !calDate.timeOnly ? calDate : null) ||
-            (calTagged && !calTagged.timeOnly ? calTagged : null);
-        const clock = (recentClockIndex >= freshBoundary ? recentClock : null)
-            || calCurrentClock || recentClock;
-        const full = (recentDateIndex >= freshBoundary ? recentDate : null)
-            || calCurrentDate || recentDate;
-        // Preserve the last legitimate RP anchor in THIS chat if an extension
-        // temporarily stops supplying one, or after a long SMS-only exchange.
-        // Never manufacture an RP calendar date from new Date().
-        const detected = validatedStoryClock(full) || null;
-        let res = detected ? {...detected} : (lastKnown ? {...lastKnown} : null);
-        if (res && clock && clock.hours !== undefined) {
-            res.hours = clock.hours;
-            res.minutes = clock.minutes;
-        }
-        res = validatedStoryClock(res);
-        if (res && (detected || (clock && lastKnown))) {
-            const stored = JSON.stringify(lastKnown);
-            const next = JSON.stringify(res);
-            if (next !== stored) {
-                clockMeta.storyClockLastKnown = {day: res.day, month: res.month, year: res.year,
-                    ...(res.hours !== undefined ? {hours:res.hours,minutes:res.minutes} : {})};
-                if (chat_metadata?.[META_KEY] === clockMeta) {
-                    try { saveMetadataDebounced(); } catch (_) { /* not ready */ }
-                }
-            }
-        }
-        // Display whether the result was actually found in RP/calendar now,
-        // or restored from this chat's previously verified clock snapshot.
-        // This diagnostic is ephemeral and is not written into chat metadata.
-        if (res) res.source = detected ? 'detected' : 'lastKnown';
-        _rpDateCache = res || null;
+        _rpDateSig=sig;
+        if(!date && !time){_rpDateCache=null;return null;}
+        _rpDateCache={...(date||{}),...(time||{}),...(date?{}:{timeOnly:true}),source:'rp-post'};
         return _rpDateCache;
-    } catch (e) { _rpDateCache = null; return null; }
+    }catch(_){_rpDateSig=null;_rpDateCache=null;return null;}
 }
 
 // Обратная совместимость: label «ДД.ММ»
@@ -1393,48 +1265,8 @@ function scanChatUncached() {
     let chat = [];
     try { chat = SillyTavern.getContext()?.chat || []; } catch (e) { /* ignore */ }
 
-    const currentGlobalOffset = getRpOffsetMs();
-    const offsets = new Array(chat.length).fill(null);
-    let lastKnownOffset = null;
-
-    for (let i = 0; i < chat.length; i++) {
-        const msg = chat[i];
-        if (msg && msg.mes) {
-            // Метка времени точнее прозы: берём её, не разбирая текст дальше
-            const tagged = isPhoneOnlyClockMessage(msg) ? null : parseTimeTag(stripThink(msg.mes));
-            if (tagged) {
-                const realDate = parseRealDate(msg.send_date) || new Date();
-                const rpDate = new Date(tagged.year, tagged.month - 1, tagged.day, tagged.hours, tagged.minutes, 0, 0);
-                lastKnownOffset = rpDate.getTime() - realDate.getTime();
-                offsets[i] = lastKnownOffset;
-                continue;
-            }
-        }
-        if (msg && msg.mes && !msg.is_system) {
-            // Only time actually established for the scene may shift SMS timestamps.
-            // Dates in appointments or the SMS body are not clock anchors.
-            const marker = !isPhoneOnlyClockMessage(msg) && String(msg.mes).match(RP_DATE_RE);
-            const r = marker ? parseAnyDateTime(marker[0]) : null;
-            if (r && !r.timeOnly) {
-                const realDate = parseRealDate(msg.send_date) || new Date();
-                const rpDate = new Date(
-                    r.year, r.month - 1, r.day,
-                    r.hours ?? realDate.getHours(),
-                    r.minutes ?? realDate.getMinutes(),
-                    0, 0
-                );
-                lastKnownOffset = rpDate.getTime() - realDate.getTime();
-            }
-        }
-        offsets[i] = lastKnownOffset;
-    }
-
-    let firstKnown = offsets.find(o => o !== null);
-    if (firstKnown === undefined) firstKnown = currentGlobalOffset;
-
-    for (let i = 0; i < chat.length; i++) {
-        if (offsets[i] === null) offsets[i] = firstKnown;
-    }
+    // Only a roleplay post with an explicit clock tag has a trustworthy time.
+    // The real send_date of an SMS is not a story-time source.
 
     for (let i = 0; i < chat.length; i++) {
         const msg = chat[i];
@@ -1446,9 +1278,9 @@ function scanChatUncached() {
         const text = stripThink(sourceText);
 
         let time = null;
-        const realDate = parseRealDate(msg.send_date);
-        if (realDate) {
-            time = new Date(realDate.getTime() + (offsets[i] || 0));
+        if (!isPhoneOnlyClockMessage(msg)) {
+            const tag = parseTimeTag(stripThink(msg.mes || ''));
+            if (tag) time = new Date(tag.year,tag.month-1,tag.day,tag.hours,tag.minutes);
         }
 
         if (msg.is_user) {

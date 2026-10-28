@@ -36,8 +36,13 @@ export function extractPresentRpClock(text) {
         // Match ONLY immediate, explicit clock declarations, not times of plans,
         // deadlines, appointments or quoted messages.
         const found = CUR_CLOCK.exec(statement);
-        if (!found) continue;
-        const time = found[0].match(/\d{1,2}:\d{2}$/)?.[0];
+        const prefix = found ? statement.slice(0,found.index) : '';
+        // An SMS or quoted speaker saying "Сейчас 17:30" is not a scene clock.
+        const insideQuote = /[«"“][^»"”]*$/.test(prefix);
+        const phoneContext = /(смс|sms|сообщени|переписк|письм|написал|текст сообщени)/iu.test(prefix);
+        const time = (!insideQuote && !phoneContext ? (found?.[0] || '') : '').match(/\d{1,2}:\d{2}$/)?.[0]
+            || statement.match(/^(?:\*{0,2}|\[|\()([01]?\d|2[0-3]):([0-5]\d)(?:\*{0,2}|\]|\))$/)?.[0]
+                ?.match(/\d{1,2}:\d{2}/)?.[0];
         if (time && HHMM.test(time)) return time;
     }
     return null;
@@ -46,17 +51,16 @@ export function extractPresentRpClock(text) {
 export function currentNarrativeDateLine(text) {
     const clean = String(text || '').replace(HTML_COMMENT_RE, '').replace(/```[\s\S]*?```/g, '');
     for (const line of clean.split(/\n/).reverse()) {
-        const start = line.trim();
-        if (/^(?:сейчас|сегодня|на\s+календаре|текущая\s+дата|сюжетная\s+дата|ролев(?:ая|ую)\s+дата|дата\s+в\s+(?:истории|ролевой)|currently|today(?:\s+is)?|current\s+(?:story\s+)?date)(?=$|[^\p{L}\p{N}_])/iu.test(start)
-            && /(?:\b\d{4}-\d{1,2}-\d{1,2}\b|\b\d{1,2}[.\/-]\d{1,2}(?:[.\/-]\d{2,4})?\b|\b\d{1,2}\s+[а-яa-z]{3,}\s+\d{4}\b)/iu.test(start)) return start;
+        const start = line.trim().replace(/^[*#\s]+/, '');
+        if (/^(?:дата\s*[:=]|дата\s+и\s+время\s*[:=]|сейчас|сегодня|на\s+календаре|текущая\s+дата|сюжетная\s+дата|ролев(?:ая|ую)\s+дата|дата\s+в\s+(?:истории|ролевой)|currently|today(?:\s+is)?|current\s+(?:story\s+)?date)(?=$|[^\p{L}\p{N}_])/iu.test(start)
+        ) {
+            const mention = /(?:\b\d{4}-\d{1,2}-\d{1,2}\b|\b\d{1,2}[.\/-]\d{1,2}(?:[.\/-]\d{2,4})?\b|\b\d{1,2}\s+[а-яa-z]{3,}\s+\d{4}\b)/iu.exec(start);
+            if (!mention || mention.index > 44) continue;
+            const lead=start.slice(0,mention.index);
+            // 'Сегодня назначили встречу на 28 октября' is NOT today's date.
+            if (/(встреч|назнач|план|договор|дедлайн|ожида|будет|завтра|tomorrow|appointment|meeting|deadline)/iu.test(lead)) continue;
+            return start;
+        }
     }
     return '';
-}
-
-export function currentCalendarDateLine(text) {
-    const clean = String(text || '').replace(HTML_COMMENT_RE, '');
-    // Only an explicitly labelled current date, not the date of a holiday,
-    // reminder, plan or future event. Can be combined with a time on the line.
-    const lines = clean.split(/\n/);
-    return lines.find(line => /(?:текущ(?:ая|ие|ую)\s+дат[ауы]|сегодняшн(?:яя|юю)\s+дат[ауы]|дата\s+(?:сейчас|сцены|ролевой|истории)|current\s+(?:story\s+|rp\s+)?date|today(?:'s)?\s+date|сюжетная\s+дата|ролев(?:ая|ую)\s+дат[ауы])/iu.test(line)) || '';
 }

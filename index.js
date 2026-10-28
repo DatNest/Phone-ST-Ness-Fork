@@ -68,9 +68,8 @@ function setupSettingsPanel() {
                 <label class="gp-settings-field"><span>Контекст соцсетей</span><select id="gp-set-ctxmode" class="text_pole"><option value="rich" ${s.socialContextMode !== 'lite' ? 'selected' : ''}>История + лорбук + карточка бота</option><option value="lite" ${s.socialContextMode === 'lite' ? 'selected' : ''}>Только срез истории</option></select><small>SMS, Direct и звонки всегда получают карточку, лорбук и историю ролевой. Чужие переписки исключены.</small></label>
                 <label class="gp-settings-field gp-settings-wide"><span>Ролевая с нарратором</span><span class="gp-settings-checks"><label><input type="checkbox" id="gp-set-narrator" ${getMeta().narratorMode ? 'checked' : ''}><span>Мультиперсонажный режим (для этого чата)</span></label></span><small>Карточка описывает целый мир. Телефон выбирает действующих лиц по истории, карточке и лорбуку, а Narrator не становится аккаунтом. Записи об аккаунтах не создаются автоматически.</small></label>
                 <div class="gp-settings-wide gp-story-clock-settings">
-                    <label class="gp-settings-field gp-settings-wide"><span>Дата и время ролевой (для этого чата)</span><select id="gp-set-story-clock-mode" class="text_pole"><option value="auto">Автоматически из ролевой / календаря</option><option value="manual">Вручную — зафиксировать</option></select><small>Если источник временно исчез, сохраняется последняя достоверная отметка. Реальная дата устройства не подставляется.</small></label>
-                    <div class="gp-settings-control-row"><input type="date" id="gp-set-story-date" class="text_pole" aria-label="Игровая дата"><input type="time" id="gp-set-story-time" class="text_pole" aria-label="Игровое время"><button type="button" class="menu_button" id="gp-set-story-clock-save">Сохранить дату</button></div>
-                    <div class="gp-settings-control-row"><button type="button" class="menu_button" id="gp-set-story-clock-refresh"><i class="fa-solid fa-rotate" aria-hidden="true"></i> Обновить время и дату</button></div><small>При каждом открытии телефона время проверяется автоматически. Кнопка запускает повторное чтение сейчас.</small>
+                    <label class="gp-settings-field gp-settings-wide"><span>Дата и время ролевой</span><small>Только из явно установленных фактов в RP-постах. Если нет даты или часов, соответствующее поле остаётся пустым. Календарь, устройство и сохранённый кэш не используются.</small></label>
+                    <div class="gp-settings-control-row"><button type="button" class="menu_button" id="gp-set-story-clock-refresh"><i class="fa-solid fa-rotate" aria-hidden="true"></i> Обновить время и дату</button></div>
                     <small id="gp-story-clock-status" class="gp-settings-wide" aria-live="polite"></small>
                 </div>
                 <label class="gp-settings-field"><span>Твой ник (@)</span><input type="text" id="gp-set-handle" class="text_pole" maxlength="21" placeholder="авто из имени"></label>
@@ -525,52 +524,20 @@ function setupSettingsPanel() {
         catch(e){toast('Ошибка импорта: '+String(e.message),'fa-circle-exclamation');}
     });
     $('#gp-social-prompts-reset').on('click',()=>{if(!confirm('Вернуть стандартные промпты соцсетей?'))return;getSettings().socialPromptOverrides={};saveSettingsDebounced();populateSocialPrompts();toast('Стандартные промпты восстановлены','fa-check');});
-    const storyClockElements = () => ({mode:document.getElementById('gp-set-story-clock-mode'),date:document.getElementById('gp-set-story-date'),time:document.getElementById('gp-set-story-time'),status:document.getElementById('gp-story-clock-status')});
     const refreshStoryClockForm = () => {
-        const {mode,date,time,status} = storyClockElements(); if (!mode || !date || !time) return;
-        const meta=getMeta(),manual=meta.storyClockManual||{};
-        const manualValid = Number.isInteger(Number(manual.year)) && Number(manual.year)>0;
-        mode.value=meta.storyClockMode==='manual'?'manual':'auto';
-        if (manualValid) {
-            date.value=`${String(manual.year).padStart(4,'0')}-${String(manual.month).padStart(2,'0')}-${String(manual.day).padStart(2,'0')}`;
-            time.value=manual.hours!==undefined ? `${String(manual.hours).padStart(2,'0')}:${String(manual.minutes||0).padStart(2,'0')}` : '';
-        } else { date.value='';time.value=''; }
-        if(status){
-            const dt=getRpDateTime();
-            const marker=mode.value==='manual'?' (вручную)':dt?.source==='lastKnown'?' (последняя сохранённая отметка)':'';
-            status.textContent=dt?`Сейчас: ${String(dt.day).padStart(2,'0')}.${String(dt.month).padStart(2,'0')}.${dt.year}${dt.hours===undefined?'':` ${String(dt.hours).padStart(2,'0')}:${String(dt.minutes).padStart(2,'0')}`}${marker}`:'Сюжетная дата пока не найдена — реальная не подставляется';
-        }
+        const status=document.getElementById('gp-story-clock-status');
+        if(!status)return;
+        const dt=getRpDateTime();
+        const date=Number.isInteger(dt?.year)?`${String(dt.day).padStart(2,'0')}.${String(dt.month).padStart(2,'0')}.${dt.year}`:'не найдена';
+        const time=dt?.hours!==undefined?`${String(dt.hours).padStart(2,'0')}:${String(dt.minutes).padStart(2,'0')}`:'не найдено';
+        status.textContent=`Дата из RP-постов: ${date} · Время из RP-постов: ${time}`;
     };
-    $('#gp-set-story-clock-mode').on('change', function(){
-        const meta=getMeta();
-        if(this.value==='manual' && !meta.storyClockManual){this.value='auto';toast('Сначала укажи дату и время и нажми «Сохранить дату»','fa-circle-info');return;}
-        meta.storyClockMode=this.value==='manual'?'manual':'auto';saveMeta();invalidateStoryClockCache();refreshStoryClockForm();if(isPhoneOpen())render();
-    });
-    $('#gp-set-story-clock-save').on('click',function(){
-        const {date,time}=storyClockElements();
-        const match=String(date?.value||'').match(/^(\d{4})-(\d{2})-(\d{2})$/),hm=String(time?.value||'').match(/^([01]\d|2[0-3]):([0-5]\d)$/);
-        if(!match||!hm){toast('Укажи полную игровую дату и время','fa-circle-exclamation');return;}
-        const [year,month,day]=match.slice(1).map(Number);
-        const checked=new Date(year,month-1,day);
-        if(checked.getFullYear()!==year||checked.getMonth()!==month-1||checked.getDate()!==day){toast('Неверная игровая дата','fa-circle-exclamation');return;}
-        const meta=getMeta();meta.storyClockManual={year,month,day,hours:Number(hm[1]),minutes:Number(hm[2])};meta.storyClockMode='manual';
-        saveMeta();invalidateStoryClockCache();refreshStoryClockForm();if(isPhoneOpen())render();toast('Игровая дата сохранена только для этого чата','fa-check');
-    });
-    $('#gp-set-story-clock-refresh').on('click', function(){
-        const meta=getMeta();
-        if(meta.storyClockMode==='manual'){
-            // Preserve manually fixed time. A refresh must not silently destroy it.
-            toast('Сейчас включено ручное время. Выбери «Автоматически», чтобы обновлять дату из ролевой.','fa-circle-info');
-            refreshStoryClockForm();
-            return;
-        }
+    $('#gp-set-story-clock-refresh').on('click',()=>{
         invalidateStoryClockCache();
         const dt=getRpDateTime();
         refreshStoryClockForm();
         if(isPhoneOpen())render();
-        if(!dt) toast('Игровая дата не найдена. Реальная дата не подставлена.','fa-circle-info');
-        else if(dt.source==='lastKnown') toast('Новая дата не найдена. Сохранена последняя достоверная отметка.','fa-clock');
-        else toast('Игровые дата и время обновлены из ролевой / календаря','fa-check');
+        toast(dt?'Сюжетное время перечитано из RP-постов':'В RP-постах нет явно установленной даты или времени','fa-clock');
     });
     refreshStoryClockForm();
     $('#gp-set-narrator').on('change', function () {

@@ -41,7 +41,7 @@ function imageUrl(value){
     return text;
 }
 function clockText(){
-    const rp=getRpDateTime(),date=rp?new Date(rp.year,rp.month-1,rp.day):null;
+    const rp=getRpDateTime(),date=Number.isInteger(rp?.year)?new Date(rp.year,rp.month-1,rp.day):null;
     return {time:rp?.hours===undefined?'--:--':String(rp.hours).padStart(2,'0')+':'+String(rp.minutes).padStart(2,'0'),
         date:date?DAYS_I18N[lang()][date.getDay()]+', '+date.getDate()+' '+MONTHS_I18N[lang()][date.getMonth()]:L('Дата сюжета не установлена','Story date unknown')};
 }

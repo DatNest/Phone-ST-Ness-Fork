@@ -1,7 +1,7 @@
 import { isPhoneAppInstalled } from './state.js';
 import { parsePhoneJson } from './phone-text.js';
 import { getMeta, saveMeta, getPhoneActivityText as getPhoneMessageText, stripThink, isUserName, isBanned, getSettings, phoneActivityAllowed } from './state.js';
-import { generateInstagramDmReply, logSocialToChat, getUserName, getStories, addIgComment, resolveAuthorKey } from './social.js';
+import { generateInstagramDmReply, logSocialToChat, getUserName, getStories, activeStories, addIgComment, resolveAuthorKey } from './social.js';
 import { getInstagram, addIgDm, addIgActivity, igParty, igThread, igPerson, igEventText } from './instagram-state.js';
 import { applyPrivateBankEvents } from './bank.js';
 import { messageForward } from './message-forward.js';
@@ -133,7 +133,7 @@ export function instagramInjectLine(){
     const root=getMeta(),data=getInstagram(),social=root.social;
     if(!social?.igPosts?.length&&!social?.stories?.length&&!social?.instagram?.threads?.length)return '';
     const posts=social.igPosts||[],own=posts.filter(item=>item.ak==='user').slice(0,3),others=posts.filter(item=>item.ak!=='user').slice(0,2);
-    const ids=[...[...own,...others].map(item=>'ig '+item.id+' by '+item.author+': '+String(item.caption||item.imgDesc||'photo').slice(0,85)),...(social.stories||[]).filter(item=>Date.now()-item.time<86400000).slice(0,4).map(item=>'st '+item.id+' by '+item.author+': '+String(item.caption||item.imgDesc||'photo').slice(0,85))];
+    const ids=[...[...own,...others].map(item=>'ig '+item.id+' by '+item.author+': '+String(item.caption||item.imgDesc||'photo').slice(0,85)),...activeStories().slice(0,4).map(item=>'st '+item.id+' by '+item.author+': '+String(item.caption||item.imgDesc||'photo').slice(0,85))];
     const recent=data.threads.filter(thread=>thread.messages?.length).sort((a,b)=>b.messages.at(-1).at-a.messages.at(-1).at).slice(0,3).map(thread=>thread.author+' (saved as '+igPerson(thread).name+'): '+thread.messages.slice(-2).map(message=>(message.dir==='out'?'user':'contact')+': '+message.text.slice(0,180)).join(' | '));
     return 'INSTAGRAM: story replies and Direct messages belong here, not SMS unless a separate phone text is sent. Incoming DM: <!--tel:igdm:{"from":"canonical name","text":"message"}-->, optional "storyId" for a reply to a listed story. Characters may SEND existing Instagram posts and stories (including the user’s) to the user with an in-character comment: put "shot":{"app":"ig|st","id":"listed ID","author":"post author","text":"post/story content"} in '+(isPhoneAppInstalled('list')?'tel:igdm or tel:sms, choosing the actual delivery app':'tel:igdm')+'. This creates a forwarded card, not a new post. Do not only narrate the share or copy it as plain text. For an established notification: <!--tel:ignotify:{"from":"canonical name","kind":"like|comment|follow|story_like","postId":"listed ID","text":"optional comment"}-->; story reactions use "storyId". Notify only on the user’s content. Do not repeat events, invent user actions, or expose private DMs to outsiders. AVAILABLE POSTS/STORIES:\n'+ids.join('\n')+(recent.length?'\nPRIVATE DIRECT — only participants know:\n'+recent.join('\n'):'');
 }

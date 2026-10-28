@@ -53,36 +53,33 @@ AI-generated Twitter replies, Twitter/Instagram feed posts, Instagram/OnlyFans c
 * Settings > "Редактор промптов соцсетей" provides editable global and per-app rules, export/import JSON for any external text editor, and defaults reset. The extension enforces JSON output and blocks unwanted author impersonation separately from user-editable style instructions.
 * New features are statically checked; full SillyTavern runtime / API behavior must be tested in the user's setup.
 
-## Ness 2.55.1 — Social AU authors & story clock diagnostic fix
+## Ness 2.56.0 — single roleplay-post clock (complete replacement)
 
-* Strengthened model instructions so established AU characters can publish alongside unrelated local users; no requirement to be a personal phone contact. Characters are selected from the active story, not imported future canon.
-* Narrator roster recognizes more common card formats (labelled role bullets and cast sections), while not blindly treating every capitalized place as a person.
-* Story clock now receives an explicit priority header before lengthy card and lorebook context. If the in-story date cannot be parsed, generator is asked not to use device date as story canon.
-* Newly generated X and Instagram entries save an optional `rpAt` timestamp alongside the original real timestamp. X/Instagram feed labels use RP elapsed time when a valid RP clock exists. Old posts continue using legacy real timestamps without migration.
-* All previous account profiles, avatars, author safeguards and JSON-editable prompts stay intact.
-* Limitations: if the in-story clock is absent or not parseable from recent RP posts / calendar injections, a prompt cannot reconstruct it reliably; calendar/roleplay time markers are still needed. Other apps' timestamps may still use real time. These changes are statically checked, not runtime-tested in the user's ST.
+There is exactly one authoritative clock reader: `getRpDateTime()` in `state.js`.
+It reads the **RP chat posts**, using explicit current date/time statements or RP clock tags.
+Date and time are independent: an unknown date remains blank, an unknown time shows `--:--`.
+It DOES NOT read calendar injections, device clock, per-chat manual overrides, saved
+last-known metadata, future appointments, SMS text or telephone activity logs.
+Each opening of the phone and the "Обновить время и дату" button rescans RP posts.
 
-## Ness 2.55.2 — Guarded RP clock (SMS deadline fix)
-- RP clock now accepts explicit present-tense clock references, RP_DATE tags and validated story-clock tags from actual RP messages, rather than interpreting any HH:MM in the last messages as current time.
-- Outgoing SMS and incoming SMS-only ghost replies (including ones carrying an accidental clock tag) cannot silently advance the RP clock.
-- Future appointments, curfews, proposed meeting times, calendar-plan deadlines and phone journal entries remain content, not story-clock updates.
-- Calendar injections must explicitly identify CURRENT date/time; GlassPhone's own injected prompt is excluded from calendar source discovery.
-- The standalone parseAnyDateTime helper remains unchanged for interpreting real appointments and calendar plans.
-- No phone metadata, contacts, posts, avatars or prompt overrides are reset by this patch.
+Preferred unambiguous format in a roleplay post:
 
-## Ness 2.55.3 — Strict per-chat RP date (no real-clock fallback)
-- A date/time recognized from the RP or calendar is saved as a per-chat last-known snapshot; a temporary missing injection does not replace it with the device clock.
-- A time-only anchor without a known RP date no longer fabricates the date from new Date().
-- When no RP clock exists, phone home/lock clock shows `--:--` and date shows `Дата сюжета не установлена`, not device time.
-- Settings → Model and context now allows setting a manual YYYY-MM-DD HH:MM clock for the CURRENT chat; automatic mode remains the default.
-- Manual clock takes precedence until Auto is chosen again. The setting is per-chat; other chats retain their separate values.
-- Russian present-date parsing is fixed, and the cache signature now includes the chat identity.
-- Internal operational timestamps (file IDs, timeouts, update ordering) continue to use real time; this patch is about RP date display and source selection.
-- Previous No Auto User / accounts / images / social prompt editor are unchanged.
+    Дата: 28.10.2026
+    Время: 16:00
 
-## Ness 2.55.4 — Refresh story clock on every open
-- Every opening of the phone invalidates the detected clock cache and scans the active RP chat/calendar again **before** the screen renders, without needing a page reload.
-- Settings → Model and context → Story date/time: added **«Обновить время и дату»** to recheck sources on demand.
-- When sources provide no current clock, keeps this chat's last-known RP timestamp instead of using device time; settings explicitly labels the cached value.
-- Manual clock remains fixed until the user selects automatic mode. Refreshing does not silently override manual time.
-- SMS deadlines remain excluded from current-time detection by the existing guarded parser. No saved posts, prompts, or appearance settings are modified.
+Or one existing supported explicit tag:
+
+    [RP_DATE:28.10.2026 16:00]
+
+If no explicit current-time evidence is in any RP post, no time is inferred.
+The screenshot/home/lock screen, social captions, bank reminders and delivery progress
+use the same clock. Real timestamps may still be used **internally** for sorting,
+identifiers and throttling, never as a source of story time.
+
+There is no longer a manual clock mode, calendar fallback, or saved last-known clock.
+Old persisted settings and user data are not deleted; the removed clock overrides
+are simply ignored. No personal chat/SMS/social/avatar/theme data is reset.
+
+The previous No Auto User safeguard, narrator mode, avatar editing and social prompt
+editor remain part of this complete extension build. Syntax and isolated clock
+regression checks are performed; this is not a full browser integration test.

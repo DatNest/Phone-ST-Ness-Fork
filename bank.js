@@ -310,29 +310,29 @@ export function delRecurring(id) {
 
 function currentYearMonth() {
     const rp = getRpDateTime();
-    if (rp) return `${rp.year}-${String(rp.month).padStart(2, '0')}`;
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    return Number.isInteger(rp?.year) ? `${rp.year}-${String(rp.month).padStart(2, '0')}` : '';
 }
 function currentDay() {
     const rp = getRpDateTime();
-    return rp ? rp.day : new Date().getDate();
+    return Number.isInteger(rp?.year) ? rp.day : null;
 }
 
 function dueDay(day) {
-    const [year,month] = currentYearMonth().split('-').map(Number);
+    const ym=currentYearMonth(); if(!ym)return null;
+    const [year,month] = ym.split('-').map(Number);
     return Math.min(Math.max(1, Number(day) || 1), new Date(year,month,0).getDate());
 }
 
 export function bankToday() {
-    return `${currentYearMonth()}-${String(currentDay()).padStart(2,'0')}`;
+    const ym=currentYearMonth(), day=currentDay();
+    return ym && day!==null ? `${ym}-${String(day).padStart(2,'0')}` : '';
 }
 
 export function billPaid(bill) {
-    return bill.repeat === 'once' ? !!bill.paidAt : bill.lastPaidMonth === currentYearMonth();
+    return bill.repeat === 'once' ? !!bill.paidAt : (!!currentYearMonth() && bill.lastPaidMonth === currentYearMonth());
 }
 
-export function loanPaidThisMonth(loan) { return loan.lastPaidMonth === currentYearMonth(); }
+export function loanPaidThisMonth(loan) { return !!currentYearMonth() && loan.lastPaidMonth === currentYearMonth(); }
 
 export function payRecurring(id) {
     const b = getBank();
@@ -353,7 +353,7 @@ export function monthlyObligations() {
 // наступил и ещё не оплачены. Нормализованный вид:
 // { kind:'bill'|'loan', id, name, amount, day, overdue }
 export function getBankReminders() {
-    if (!isPhoneAppInstalled('bank')) return [];
+    if (!isPhoneAppInstalled('bank') || !currentYearMonth() || currentDay()===null) return [];
     const b = getBank();
     const day = currentDay();
     const ym = currentYearMonth();

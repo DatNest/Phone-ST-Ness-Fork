@@ -1,5 +1,5 @@
 
-import { getMeta, saveMeta, getRpDateTime, rpTimeTagged, resolveContactKey, contactOriginalName, displayName } from './state.js';
+import { getMeta, saveMeta, getRpDateTime, resolveContactKey, contactOriginalName, displayName } from './state.js';
 import { generateShopContent, logSocialToChat, getUserName, generateCourier, generateCourierReply } from './social.js';
 import { addTransaction, getBank, fmtMoney, roundMoney } from './bank.js';
 import { lang } from './i18n.js';
@@ -223,13 +223,12 @@ const DELIVERY_ETA = {
     adult: [1440, 4320],
 };
 const DEFAULT_ETA = [1440, 4320];
-const MIN_PER_TURN = 12;        // один ход ролевой ≈ столько минут
 // Бронь, а не посылка: везти нечего
 const BOOKING_CATS = new Set(['hotels', 'travel']);
 
 function rpMinutes() {
     const d = getRpDateTime();
-    if (!d || !Number.isFinite(d.year)) return null;
+    if (!Number.isInteger(d?.year) || d?.hours === undefined) return null;
     return Math.floor(Date.UTC(d.year, (d.month || 1) - 1, d.day || 1, d.hours || 0, d.minutes || 0) / 60000);
 }
 // Ходы ролевой, а не длина массива: телефон сам дописывает в чат строки
@@ -266,28 +265,15 @@ export function fmtEta(min) {
     return en ? `~${d} d` : `~${d} ${d === 1 ? 'день' : d < 5 ? 'дня' : 'дней'}`;
 }
 
-// Доля пройденного пути 0..1. Берём максимум из двух шкал: RP-время
-// (если в ролевой есть даты) и ходы чата — так дальняя доставка доедет
-// максимум за ~20 ходов даже в ролевой без единой даты.
+// Progress changes ONLY when an explicit in-story date AND time are present.
+// A new roleplay turn is not evidence that time has elapsed.
 function orderProgress(o) {
     if (!o.eta) return 1;
-    let byRp = 0;
-    const now = rpMinutes();
-    const haveRp = now !== null && Number.isFinite(o.placedRp);
-    if (haveRp) {
-        const d = now - o.placedRp;
-        // Отрицательное — флешбэк/скачок назад; огромное — смена ролевой
-        if (d >= 0 && d < 60 * 1440 * 60) byRp = d / o.eta;
-    }
-    // Когда модель ставит метки времени, часы сюжета достоверны — считаем
-    // строго по ним. Иначе заказ приезжал бы просто потому, что «прошло
-    // три сообщения», хотя в сюжете не прошло и минуты.
-    if (haveRp && rpTimeTagged()) return byRp;
-    // Не меньше трёх ходов даже у самой быстрой доставки: за один ответ
-    // ролевой курьер приехать не может
-    const turnsNeeded = Math.min(20, Math.max(3, Math.round(o.eta / MIN_PER_TURN)));
-    const byTurns = Math.max(0, chatLen() - (o.placedTurn || 0)) / turnsNeeded;
-    return Math.max(byRp, byTurns);
+    const now=rpMinutes();
+    if (now===null || !Number.isFinite(o.placedRp)) return 0;
+    const elapsed=now-o.placedRp;
+    if (elapsed < 0 || elapsed >= 60*1440*60) return 0;
+    return Math.max(0, Math.min(1, elapsed / o.eta));
 }
 
 // Осталось ждать (минуты RP) — для карточки заказа
