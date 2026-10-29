@@ -13,7 +13,7 @@ import { isPhoneOnlyClockMessage, extractPresentRpClock, currentNarrativeDateLin
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '2.57.0-ness.12';
+export const GP_VERSION = '2.57.1-ness.13';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──

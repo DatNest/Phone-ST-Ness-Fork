@@ -1362,7 +1362,7 @@ function renderLock(screen) {
     const mi = rpDt?.minutes;
     const dateStr = Number.isInteger(rpDt?.year)
         ? `${DAYS[new Date(rpDt.year, rpDt.month - 1, rpDt.day).getDay()]}, ${rpDt.day} ${MONTHS[rpDt.month - 1]}`
-        : L('Дата сюжета не установлена','Story date unknown');
+        : tr('Дата сюжета не установлена');
     const notes = lockNotifications();
 
     screen.innerHTML = `
@@ -1427,7 +1427,7 @@ function renderHome(screen) {
         const rpDate = new Date(rpDt.year, rpDt.month - 1, rpDt.day);
         dateStr = `${DAYS[rpDate.getDay()]}, ${rpDt.day} ${MONTHS[rpDt.month - 1]}`;
     } else {
-        dateStr = L('Дата сюжета не установлена','Story date unknown');
+        dateStr = tr('Дата сюжета не установлена');
     }
 
     screen.innerHTML = `

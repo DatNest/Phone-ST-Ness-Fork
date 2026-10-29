@@ -16,6 +16,7 @@ export const MONTHS_I18N = {
 
 // ── Точный словарь (ключ = русская строка после trim) ──
 const DICT = {
+    'Дата сюжета не установлена': 'Story date unknown',
     'Выбрать готовое фото': 'Choose an existing photo', 'Фото добавлено': 'Photo added',
     'Не удалось сохранить фото': 'Could not save the photo',
 
