@@ -53,9 +53,9 @@ async function connect(call,forceIncoming=false){
 }
 export function startPhoneCall(contact){
     if (!isPhoneAppInstalled('phone')) return Promise.resolve();
-    if(!String(contact?.number||'').trim())throw new Error(L('Сначала сохрани номер контакта','Save this contact’s phone number first'));
+    if(!contact?.numberKnown && !String(contact?.number||'').trim())throw new Error(L('Сначала узнай номер в ролевой или сохрани его вручную','Learn the number in roleplay or save it manually first'));
     if(active())throw new Error(L('Сначала заверши текущий звонок','End your current call first'));
-    const call={id:'call:'+uid(),key:contact.key||keyOf(contact.name),name:contact.name,originalName:contact.originalName,number:contact.number||'',direction:'out',status:'connecting',at:Date.now(),when:getRpDateTime()?.label||'',transcript:[],unread:false};
+    const call={id:'call:'+uid(),key:contact.key||keyOf(contact.name),name:contact.name,originalName:contact.originalName,number:contact.number||'',numberKnown:Boolean(contact.number||contact.numberKnown),direction:'out',status:'connecting',at:Date.now(),when:getRpDateTime()?.label||'',transcript:[],unread:false};
     const calls=getCalls();calls.history.unshift(call);calls.history=calls.history.slice(0,80);saveMeta();return connect(call);
 }
 export function acceptPhoneCall(id){
@@ -88,11 +88,11 @@ export function harvestPhoneCalls(){
             if(getSettings().quietMode||isUserName(name)||(data.to&&!isUserName(data.to)))continue;
             const contact=phoneBook().find(c=>c.key===resolveContactKey(name));
             // Unknown people and blocked callers cannot call just because a model emits a tag.
-            if(!contact||!contact.number||isSmsBlocked(contact.key))continue;
+            if(!contact||(!contact.number && !contact.numberKnown)||isSmsBlocked(contact.key))continue;
             const publicListing=root.contacts.some(c=>c.publicListing&&keyOf(c.name)===contact.key);
             if(publicListing&&!calls.history.some(c=>c.key===contact.key&&c.direction==='out'&&['active','ended'].includes(c.status)))continue;
             if(calls.history.some(c=>c.key===contact.key&&c.status==='ringing'))continue;
-            const call={id:'call:'+uid(),key:contact.key,name:contact.name,originalName:contact.originalName,number:contact.number,direction:'in',status:'ringing',at:Date.now(),when:getRpDateTime()?.label||'',reason:String(data.reason||'').slice(0,300),transcript:[],unread:true};
+            const call={id:'call:'+uid(),key:contact.key,name:contact.name,originalName:contact.originalName,number:contact.number,numberKnown:Boolean(contact.number||contact.numberKnown),direction:'in',status:'ringing',at:Date.now(),when:getRpDateTime()?.label||'',reason:String(data.reason||'').slice(0,300),transcript:[],unread:true};
             calls.history.unshift(call);incoming.push(call);
         }
     }
@@ -105,7 +105,7 @@ export function callsInjectLine(){
 }
 export function callsInjectRule() {
     if (!isPhoneAppInstalled('phone')) return '';
-    return '[CALLS] A contact with the user’s number may call when the scene gives a reason, usually while apart: <!--tel:call:{"from":"canonical contact name","to":"{{user}}","reason":"why"}-->. One call event; no SMS substitute or second call during an active call. The app handles acceptance and dialogue. Saving a venue listing does not give it the user’s number.';
+    return '[CALLS] A contact whose phone-number exchange with the user is established (even if digits were not given) may call when the scene gives a reason, usually while apart: <!--tel:call:{"from":"canonical contact name","to":"{{user}}","reason":"why"}-->. One call event; no SMS substitute or second call during an active call. The app handles acceptance and dialogue. Saving a venue listing does not give it the user’s number.';
 }
 function contactEditor(screen,contact,api){return openPhoneContactEditor(screen,api,{contact,number:view().digits});}
 let callTimer=null;
@@ -122,7 +122,7 @@ export function renderPhoneBook(screen,api,onlyBook=false){
         body='<div class="gp-dialer"><input id="gp-dial-number" type="tel" maxlength="40" value="'+esc(v.digits)+'" aria-label="'+L('Номер телефона','Phone number')+'" placeholder=""><div class="gp-dial-keys">'+[['1',''],['2','ABC'],['3','DEF'],['4','GHI'],['5','JKL'],['6','MNO'],['7','PQRS'],['8','TUV'],['9','WXYZ'],['*',''],['0','+'],['#','']].map(x=>'<button data-dial-key="'+x[0]+'"><b>'+x[0]+'</b><small>'+x[1]+'</small></button>').join('')+'</div><div class="gp-dial-bottom"><span class="gp-dial-spacer" aria-hidden="true"></span><button class="gp-call-green" data-dial-call>'+I('fa-phone')+'</button><button data-dial-back aria-label="'+L('Удалить цифру','Delete digit')+'" style="visibility:'+(v.digits?'visible':'hidden')+'">'+I('fa-delete-left')+'</button></div></div>';
     }else if(v.tab==='contacts'||onlyBook){
         const selected=book.find(c=>c.key===v.selected);
-        if(selected)body='<div class="gp-book-profile"><button class="gp-book-back" data-book-list>'+I('fa-chevron-left')+' '+L('Контакты','Contacts')+'</button><div class="gp-call-avatar">'+avatar(selected)+'</div><h1>'+esc(selected.name)+'</h1><p>'+esc(selected.number||L('Номер не указан','No number saved'))+'</p><div class="gp-book-actions"><button data-call-contact="'+esc(selected.key)+'">'+I('fa-phone')+'<span>'+L('Позвонить','Call')+'</span></button><button data-sms-contact="'+esc(selected.key)+'">'+I('fa-comment-dots')+'<span>'+L('Сообщение','Message')+'</span></button><button data-book-edit="'+esc(selected.key)+'">'+I('fa-user-pen')+'<span>'+L('Изменить','Edit')+'</span></button></div></div>';
+        if(selected)body='<div class="gp-book-profile"><button class="gp-book-back" data-book-list>'+I('fa-chevron-left')+' '+L('Контакты','Contacts')+'</button><div class="gp-call-avatar">'+avatar(selected)+'</div><h1>'+esc(selected.name)+'</h1><p>'+esc(selected.number||(selected.numberKnown?L('Номер известен в ролевой','Number known in roleplay'):L('Номер не указан','No number saved')))+'</p><div class="gp-book-actions"><button data-call-contact="'+esc(selected.key)+'">'+I('fa-phone')+'<span>'+L('Позвонить','Call')+'</span></button><button data-sms-contact="'+esc(selected.key)+'">'+I('fa-comment-dots')+'<span>'+L('Сообщение','Message')+'</span></button><button data-book-edit="'+esc(selected.key)+'">'+I('fa-user-pen')+'<span>'+L('Изменить','Edit')+'</span></button></div></div>';
         else{const query=v.query.toLocaleLowerCase();body='<div class="gp-book-search">'+I('fa-magnifying-glass')+'<input id="gp-book-search" maxlength="100" value="'+esc(v.query)+'" placeholder="'+L('Имя или номер','Name or number')+'"></div><div class="gp-book-list">'+book.filter(c=>(c.name+' '+c.number).toLocaleLowerCase().includes(query)).map(c=>'<button data-book-contact="'+esc(c.key)+'"><span class="gp-book-small-avatar">'+avatar(c)+'</span><span><b>'+esc(c.name)+'</b><small>'+esc(c.number||'')+'</small></span>'+I('fa-chevron-right')+'</button>').join('')+(book.length?'':'<div class="gp-call-empty">'+I('fa-address-book')+'<h3>'+L('Твоя телефонная книга','Your address book')+'</h3><p>'+L('Здесь появятся контакты из переписок. Можно добавить новый вручную.','Contacts from your messages appear here. You can also add one manually.')+'</p></div>')+'</div>';}
     }else{
         body='<div class="gp-calls-list">'+calls.history.map(c=>'<button data-call-history="'+esc(c.id)+'" class="'+(c.status==='missed'?'gp-call-missed':'')+'"><span>'+I(c.direction==='in'?'fa-arrow-down':'fa-arrow-up')+'</span><span><b>'+esc(c.name)+'</b><small>'+esc(L(({ended:'Завершён',unanswered:'Нет ответа',cancelled:'Отменён',failed:'Ошибка соединения',declined:'Отклонён',missed:'Пропущенный',ringing:'Входящий'})[c.status]||c.status,({ended:'Completed',unanswered:'No answer',cancelled:'Cancelled',failed:'Connection error',declined:'Declined',missed:'Missed',ringing:'Incoming'})[c.status]||c.status))+(c.started?' · '+fmtDuration(duration(c)):'')+'</small></span><time>'+esc(c.when||new Date(c.at).toLocaleDateString())+'</time></button>').join('')+(calls.history.length?'':'<div class="gp-call-empty">'+I('fa-phone')+'<h3>'+L('Здесь будут твои звонки','Your calls will appear here')+'</h3><p>'+L('Выбери контакт или набери сохранённый номер.','Choose a contact or dial a saved number.')+'</p></div>')+'</div>';

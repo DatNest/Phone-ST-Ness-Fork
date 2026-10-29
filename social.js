@@ -1275,7 +1275,32 @@ function socialTokenLimit(requested = 1024) {
     return configured ? Math.min(taskLimit, configured) : taskLimit;
 }
 
-async function socialGen(prompt, { maxTokens = 1024, image = null, prefill = '', app = null } = {}) {
+// One deadline for every phone LLM request. Without this, a stalled connection
+// leaves the app spinner permanently active because its awaited Promise never
+// settles. The late provider response cannot be used after the deadline.
+const PHONE_LLM_DEADLINE_MS = 120_000;
+function withDeadline(promise, milliseconds, label) {
+    let timer;
+    const limit = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+            const error = new Error(`${label}: модель не ответила за ${Math.round(milliseconds / 1000)} секунд. Проверь подключение и журнал запросов телефона.`);
+            error.name = 'PhoneRequestTimeout';
+            reject(error);
+        }, milliseconds);
+    });
+    return Promise.race([Promise.resolve(promise), limit]).finally(() => clearTimeout(timer));
+}
+
+async function socialGen(prompt, options = {}) {
+    try {
+        return await withDeadline(socialGenCore(prompt, options), PHONE_LLM_DEADLINE_MS, 'Генерация телефона');
+    } catch (error) {
+        if (error?.name === 'PhoneRequestTimeout') logFail('тайм-аут генерации', String(error.message));
+        throw error;
+    }
+}
+
+async function socialGenCore(prompt, { maxTokens = 1024, image = null, prefill = '', app = null } = {}) {
     const st = getSettings();
     const activityVersion = st.phoneActivityVersion;
     const checkActivity = () => {
@@ -1533,6 +1558,10 @@ function parseJsonObject(raw) {
 // рвутся: почти весь бюджет уходит в reasoning, а на JSON остаются крохи и
 // ответ обрывается на середине. Пустой разбор — один повтор с двойным лимитом.
 async function socialGenArray(prompt, opts = {}) {
+    return await withDeadline(socialGenArrayCore(prompt, opts), 150_000, 'Обновление ленты');
+}
+
+async function socialGenArrayCore(prompt, opts = {}) {
     const array = parseJsonArray(await socialGen(prompt, opts));
     // An empty array can be a valid "no reply" result; retry only malformed output.
     if (Array.isArray(array)) return array;
@@ -1660,7 +1689,7 @@ async function richContext({ publicOnly = false, contactNames = [] } = {}) {
                     creatorNotes: '',
                     trigger: 'normal',
                 };
-                const res = await wiMod.getWorldInfoPrompt(chatForWI, 8192, true, scanData);
+                const res = await withDeadline(wiMod.getWorldInfoPrompt(chatForWI, 8192, true, scanData), 20_000, 'Чтение лорбука');
                 out.wi = stripThink(sub(loreText(res))).slice(0, narratorMode() ? 8000 : 4000);
             }
         } catch (e) {
@@ -1775,12 +1804,22 @@ Format: [{"photo":"what the frame shows","caption":"..."}]`;
 
 export async function refreshFeed(kind = 'tw') {
     const s = getSocial();
-    if (kind === 'ig') {
-        s.igPosts = s.igPosts.filter(p => p.ak === 'user');
-        return await generateIgFeed();
+    const field = kind === 'ig' ? 'igPosts' : 'tweets';
+    const original = s[field];
+    // A timeout, API error or malformed JSON must not erase the existing feed.
+    // Work against a temporary array; commit it only after fresh posts arrive.
+    s[field] = original.filter(item => item.ak === 'user');
+    try {
+        const added = kind === 'ig' ? await generateIgFeed() : await generateTweetFeed();
+        if (added > 0) return added;
+        s[field] = original;
+        saveMeta();
+        return 0;
+    } catch (error) {
+        s[field] = original;
+        saveMeta();
+        throw error;
     }
-    s.tweets = s.tweets.filter(t => t.ak === 'user');
-    return await generateTweetFeed();
 }
 
 export async function generateTweetFeed() {
@@ -3908,7 +3947,7 @@ export async function generatePhoneCallReply(contact, transcript = [], utterance
     const prompt=context+'\n\n'+
         'CALL RULES: This is spoken dialogue over the phone. Respect the character’s current location, relationship and availability from the story. Do not write the user’s speech, thoughts or actions. For the first outgoing connection decide whether they can answer; otherwise return answered:false and a short reason. For an accepted incoming call or ongoing call return answered:true. Use the language of the current user utterance or roleplay history. Reply naturally in the character’s voice, 1–4 sentences. No narration, status blocks, HTML, phone tags or Markdown.\n'+
         'CALL DIRECTION: '+(contact.direction==='in'?'the character called the user':'the user called the character')+'\n'+
-        'CHARACTER: '+JSON.stringify(original)+'; NUMBER: '+JSON.stringify(contact.number||'')+'\n'+
+        'CHARACTER: '+JSON.stringify(original)+'; NUMBER: '+JSON.stringify(contact.number||'')+'; NUMBER EXCHANGE CONFIRMED: '+Boolean(contact.numberKnown||contact.number)+'; unknown digits are not a reason to fabricate digits.\n'+
         'ALREADY CONNECTED / ACCEPTED INCOMING: '+!!contact.connected+'\n'+
         'INCOMING CALL REASON: '+JSON.stringify(contact.reason||'')+'\n'+
         'CALL SO FAR: '+JSON.stringify(turns)+'\n'+

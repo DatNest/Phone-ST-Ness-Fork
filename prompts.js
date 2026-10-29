@@ -70,7 +70,7 @@ function buildPrompt() {
     for (const contact of contacts.values()) {
         if (inAppKeys.has(keyOf(contact.name))) continue;
         const listing = meta.contacts.some(item => item.publicListing && keyOf(item.name) === keyOf(contact.name));
-        contactLines.push(`- ${contact.name}${contact.number ? ' (' + contact.number + ')' : ''}${listing ? ' [public directory listing; no personal acquaintance or access to the user’s number implied]' : ''}`);
+        contactLines.push(`- ${contact.name}${contact.number ? ' (' + contact.number + ')' : contact.numberKnown ? ' [number exchanged in RP; digits not specified]' : ''}${listing ? ' [public directory listing; no personal acquaintance or access to the user’s number implied]' : ''}`);
     }
     const groups = new Map();
     for (const group of Array.isArray(meta.groups) ? meta.groups : []) {
@@ -92,7 +92,7 @@ function buildPrompt() {
         (sms || isPhoneAppInstalled('phone')) && blocked.length ? 'BLOCKED SENDERS — no incoming SMS from: ' + blocked.join(', ') : '',
         sms && groups.size ? 'GROUP CHATS:\n' + [...groups.values()].map(group => `- ${group.name}: ${group.members.join(', ')} + {{user}}`).join('\n') : '',
         'TAG FORMAT: valid JSON in HTML comments, English keys, canonical character names. Append each event once on its own line after visible prose; clock last. Never put tags in reasoning, copy old events, or output the app’s <!--tel:log--> journal / «[Событие мира» format.',
-        isPhoneAppInstalled('contacts') ? 'CONTACT: only when a character actually gives {{user}} a new number: <!--tel:contact:{"name":"CharacterName","number":"local phone number"}-->. Use an established number or invent one in the setting’s format. Do not re-add existing contacts.' : '',
+        isPhoneAppInstalled('contacts') ? 'CONTACT: only when a character actually gives {{user}} a new number: <!--tel:contact:{"name":"CharacterName","number":"local phone number"}-->. Use established digits when supplied; if the exchange happened without digits, leave "number" empty. Never invent a phone number. Do not re-add existing contacts.' : '',
         messaging ? 'INCOMING SMS: <!--tel:sms:{"from":"CharacterName","to":"{{user}}","text":"exact message"}-->. One tag per message arriving on {{user}}’s phone, from someone who plausibly has their number. Never tag messages sent by {{user}} or delivered to anyone else.' : '',
         inAppKeys.size ? 'DATING APP EXCEPTION: existing in-app matches may send app messages without exchanging phone numbers; route these with the same tel:sms tag. This does not give them SMS/call access.' : '',
         !messaging ? '' : compact

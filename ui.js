@@ -2009,7 +2009,7 @@ async function genGroupChats() {
         toast(`Новых чатов: ${created}`, 'fa-comments');
     } catch (e) {
         console.error('[GlassPhone] genGroupChats failed:', e);
-        toast(String(e?.message || e).slice(0, 60), 'fa-circle-exclamation');
+        toast(String(e?.message || e).slice(0, 110), 'fa-circle-exclamation');
     } finally {
         _chatsGenBusy = false;
         if (currentScreen === 'list') render();
@@ -2249,7 +2249,7 @@ function renderThread(screen) {
         ? (t.members?.length ? t.members.join(', ') : 'групповой чат')
         : tinMatch
             ? `${blocked ? 'заблокирован · ' : ''}${tinMatch.inApp ? 'чат в Тиндере' : 'из Тиндера'} · ${tinMatch.age}`
-            : `${blocked ? 'заблокирован · ' : ''}${t.number || 'номер неизвестен'} · ${handleFor(`contact:${t.key}`, t.name)}`;
+            : `${blocked ? 'заблокирован · ' : ''}${t.number || (t.numberKnown ? 'номер получен в ролевой' : 'номер неизвестен')} · ${handleFor(`contact:${t.key}`, t.name)}`;
 
     screen.innerHTML = `
         <div class="gp-header gp-thread-header">
@@ -2845,7 +2845,7 @@ function renderTw(screen) {
             toast(n > 0 ? `Новых твитов: ${n}` : 'Не получилось — попробуй ещё раз', n > 0 ? 'fa-x-twitter' : 'fa-circle-exclamation');
         } catch (e) {
             console.error('[GlassPhone] tw feed failed:', e);
-            toast('Ошибка генерации', 'fa-circle-exclamation');
+            toast(`Ошибка ленты: ${String(e?.message || e).slice(0, 100)}`, 'fa-circle-exclamation');
         } finally {
             genBusy = false;
             if (currentScreen === 'tw') render();
@@ -2861,7 +2861,7 @@ function renderTw(screen) {
             const n = await refreshFeed('tw');
             toast(n > 0 ? `Лента пересобрана: ${n}` : 'Не получилось — попробуй ещё раз', n > 0 ? 'fa-x-twitter' : 'fa-circle-exclamation');
         } catch (e) {
-            toast(`Не получилось: ${String(e?.message || e).slice(0, 60)}`, 'fa-circle-exclamation');
+            toast(`Не получилось: ${String(e?.message || e).slice(0, 110)}`, 'fa-circle-exclamation');
         } finally {
             genBusy = false;
             if (currentScreen === 'tw') render();
@@ -3300,7 +3300,7 @@ function renderIg(screen) {
             toast(n > 0 ? `Новых постов: ${n}` : 'Не получилось — попробуй ещё раз', n > 0 ? 'fa-instagram' : 'fa-circle-exclamation');
         } catch (e) {
             console.error('[GlassPhone] ig feed failed:', e);
-            toast('Ошибка генерации', 'fa-circle-exclamation');
+            toast(`Ошибка ленты: ${String(e?.message || e).slice(0, 100)}`, 'fa-circle-exclamation');
         } finally {
             genBusy = false;
             if (currentScreen === 'ig') render();

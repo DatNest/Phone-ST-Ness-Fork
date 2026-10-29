@@ -7,12 +7,13 @@ import { saveBase64AsFile } from '../../../utils.js';
 import { readPhoneMessage } from './message-sources.js';
 import { captureRoleplaySms, extractRoleplaySms, hasMixedRoleplaySms } from './roleplay-sms.js';
 import { cleanContactName, contactNameKey, redirectedContactKey, resolveIdentity, repairContactMetadata } from './contact-identity.js';
+import { discoverRpContacts } from './contact-discovery.js';
 import { isPhoneOnlyClockMessage, extractPresentRpClock, currentNarrativeDateLine, parseHtStoryClock } from './story-clock-guard.js';
 
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '2.56.1-ness.10';
+export const GP_VERSION = '2.57.0-ness.12';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -941,26 +942,8 @@ const VOICE_KIND_RE = /^(голосовое|voice)$/i;
 // модель ставит их осознанно. Эвристики «чей телефон» и бэктик-парсер прозы
 // удалены: от тегов внутри CoT защищает stripThink, от адресованных боту — j.to.
 
-// ── Детект номера в обычной прозе («вот мой номер: +7 900...») ──
-// Контекстное слово должно быть в пределах ±120 символов от числа.
-const PHONE_NUM_RE = /(?:\+?\d[\d\-\s()]{7,17}\d)/g;
-const PHONE_CTX_RE = /(номер|телефон|запиши|звони|набери|позвони|пиши\s+мне|наберёшь|наберешь|смс|sms|phone|number|call\s+me|text\s+me|reach\s+me)/i;
-
-function detectProseNumber(text) {
-    if (!text) return null;
-    PHONE_NUM_RE.lastIndex = 0;
-    let m;
-    while ((m = PHONE_NUM_RE.exec(text)) !== null) {
-        const numStr = m[0].trim();
-        const digits = numStr.replace(/\D/g, '');
-        if (digits.length < 7 || digits.length > 15) continue;
-        const start = Math.max(0, m.index - 120);
-        const end = Math.min(text.length, m.index + numStr.length + 120);
-        const ctx = text.slice(start, end);
-        if (PHONE_CTX_RE.test(ctx)) return numStr;
-    }
-    return null;
-}
+// RP phone-number exchanges are parsed by contact-discovery.js.
+// Do not match arbitrary digit sequences or use the narrator as a sender.
 
 // One rule for the roleplay clock: explicit evidence from RP posts or no time.
 // Real-world timestamps must never be converted into invented RP timestamps.
@@ -1242,16 +1225,22 @@ function scanChatUncached() {
     const contacts = new Map();
     const threads = new Map();
 
-    const addContact = (name, number, source) => {
+    // One contact representation for RP evidence, phone tags and manual entries.
+    // numberKnown allows an established in-story exchange without fabricating digits.
+    const addContact = (name, number, source, numberKnown = false) => {
+        if (!name || isUserName(name) || /^(?:narrator|нарратор|рассказчик|повествователь)$/iu.test(String(name).trim())) return;
         const k = resolveContactKey(name);
         if (!k) return;
         rememberContact(name,k);
         const originalName=contactOriginalName(k,String(name).trim());
+        const value=String(number || '').trim();
+        const known=Boolean(numberKnown || value);
         const existing = contacts.get(k);
         if (!existing) {
-            contacts.set(k, { name: originalName, number: String(number || '').trim(), source });
-        } else if (!existing.number && number) {
-            existing.number = String(number).trim();
+            contacts.set(k, { name: originalName, number: value, numberKnown: known, source });
+        } else {
+            if (!existing.number && value) existing.number = value;
+            existing.numberKnown ||= known;
         }
     };
 
@@ -1324,7 +1313,8 @@ function scanChatUncached() {
                 } else if (to && (body || entry.img)) {
                     pushMsg(to, entry);
                     // Раз юзер пишет этому имени — контакт точно есть
-                    addContact(to, '', 'implicit');
+                    const inApp = getMeta().tinder?.matches?.some(match => match.inApp && resolveContactKey(match.name) === resolveContactKey(to));
+                    addContact(to, '', 'implicit', !inApp);
                 }
             }
         }
@@ -1337,13 +1327,12 @@ function scanChatUncached() {
         // Для сообщений юзера эта проверка всегда false, так как мы хотим парсить их тэги.
         TAG_RE.lastIndex = 0;
         let tm;
-        let smsTagsInMsg = 0;
         while ((tm = TAG_RE.exec(text)) !== null) {
             const kind = tm[1].toLowerCase();
             const j = safeJson(tm[2]);
             if (!j) continue;
-            if (kind === 'contact' && j.name) {
-                addContact(j.name, j.number || '', 'tag');
+            if (kind === 'contact' && j.name && (!j.to || isUserName(j.to))) {
+                addContact(j.name, j.number || '', 'tag', true);
             } else if (kind === 'sms' && j.from && (j.text || j.photo || j.shot)) {
                 // Явные теги = наш протокол, модель ставит их осознанно — доверяем.
                 // Исключение первое: тег явно адресован боту (j.to = имя бота).
@@ -1391,25 +1380,25 @@ function scanChatUncached() {
                     pushMsg(`group:${keyOf(j.chat)}`, entry, String(j.chat));
                 } else {
                     pushMsg(j.from, entry);
-                    addContact(j.from, j.number || '', 'implicit');
+                    const inApp = getMeta().tinder?.matches?.some(match => match.inApp && resolveContactKey(match.name) === resolveContactKey(j.from));
+                    addContact(j.from, j.number || '', 'implicit', !inApp);
                 }
-                smsTagsInMsg++;
             }
         }
 
-        // Fallback: номер в прозе без тега («подхватываем»).
-        // ТОЛЬКО видимый текст: html-комменты вырезаются — иначе таймстамп в имени
-        // файла из маркера (sms_1783152188594.jpeg) ловился как «номер телефона»
-        // и создавал контакт с именем автора сообщения (даже самого юзера).
-        if (!msg.is_user) {
-            const proseNum = detectProseNumber(text.replace(/<!--[\s\S]*?-->/g, ''));
-            if (proseNum) {
-                const charName = msg.name || null;
-                if (charName && !contacts.has(keyOf(charName))) {
-                    addContact(charName, proseNum, 'prose');
-                }
-            }
+        // RP contacts are independent from the phone-tag protocol and prompt
+        // injection. Both player and narrator posts can establish an exchange.
+        // Phone-only messages/journals are excluded from the RP evidence path.
+        if (!isAppJournal(msg) && !isPhoneOnlyClockMessage(msg)) {
+            const context = SillyTavern.getContext();
+            const evidence = discoverRpContacts({ ...msg, mes: getPhoneMessageText(msg) }, {
+                userName: context?.name1 || '',
+                mainCharacterName: context?.name2 || '',
+                narratorMode: getMeta().narratorMode === true,
+            });
+            for (const entry of evidence) addContact(entry.name, entry.number, entry.source, entry.numberKnown);
         }
+
     }
 
     // ── Ручные контакты из метаданных (мерж; ручной номер приоритетнее пустого) ──
@@ -1420,9 +1409,12 @@ function scanChatUncached() {
         rememberContact(c.name,k);
         const existing = contacts.get(k);
         if (!existing) {
-            contacts.set(k, { name: c.name, number: c.number || '', source: 'manual' });
+            contacts.set(k, { name: c.name, number: c.number || '', numberKnown: Boolean(c.number || c.numberKnown), source: 'manual' });
         } else if (c.number) {
             existing.number = c.number;
+            existing.numberKnown = true;
+        } else if (c.numberKnown) {
+            existing.numberKnown = true;
         }
     }
 
@@ -1477,6 +1469,7 @@ export function getThreadList() {
             name: displayName(k, (g && g.name) || (c && c.name) || (t && t.name) || k),
             originalName: isGroup ? ((g && g.name) || (t && t.name) || k) : contactOriginalName(k,(c && c.name) || (t && t.name) || k),
             number: (c && c.number) || '',
+            numberKnown: Boolean(c?.numberKnown || c?.number),
             isGroup,
             members: g ? g.members : (isGroup ? [...new Set(msgs.filter(m => m.from).map(m => m.from))] : []),
             last,
