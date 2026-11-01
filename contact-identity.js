@@ -14,24 +14,89 @@ export function redirectedContactKey(meta,key) {
     return key;
 }
 
+// A full character name is evidence of an identity. A display label is not.
+// First-name matching is allowed only when ONE established full-name contact
+// fits and there is no conflicting phone number or saved label.
+function fullPersonName(value) {
+    const words = cleanContactName(value).split(' ');
+    return words.length >= 2 && words.length <= 4 && words.every(part => /^[\p{L}][\p{L}'’.-]*$/u.test(part));
+}
+
+function firstNameForms(first) {
+    const value = contactNameKey(first);
+    const forms = new Set([value]);
+    // Only generate grammatical forms of a KNOWN first name, never reverse
+    // arbitrary words to invent a character identity.
+    if (!/^[а-яё]+$/iu.test(value)) return forms;
+    const last = value.slice(-1), stem = value.slice(0,-1);
+    if (last === 'а') {
+        for (const ending of [/[гкхжчшщ]$/u.test(stem)?'и':'ы','е','у','ой','ей']) forms.add(stem+ending);
+    } else if (last === 'я') {
+        for (const ending of ['и','е','ю','ей']) forms.add(stem+ending);
+    } else if (last === 'й') {
+        for (const ending of ['я','ю','ем','е']) forms.add(stem+ending);
+    } else if (last === 'ь') {
+        for (const ending of ['я','ю','ем','е','и','ью']) forms.add(stem+ending);
+    } else if (/[бвгджзклмнпрстфхцчшщ]$/u.test(last)) {
+        for (const ending of ['а','у','ом','е']) forms.add(value+ending);
+    }
+    return forms;
+}
+
+function savedNumber(meta,key) {
+    const values = (meta.contacts || []).filter(c=>contactNameKey(c?.name)===key)
+        .map(c=>String(c.number||'').replace(/\D/g,'')).filter(Boolean);
+    return values.length === 1 ? values[0] : '';
+}
+
+function uniqueFullNameMatch(meta,query,ids) {
+    if (!query || query.includes(' ') || query.startsWith('group:')) return '';
+    const candidates = new Set();
+    const records = new Set([...Object.keys(ids),...(meta.contacts||[]).map(c=>contactNameKey(c?.name))]);
+    for (const recordKey of records) {
+        const item=ids[recordKey];
+        const original=cleanContactName(item?.originalName || recordKey);
+        if (!fullPersonName(original)) continue;
+        const first=original.split(' ')[0];
+        if (!firstNameForms(first).has(query)) continue;
+        const fullKey=redirectedContactKey(meta,recordKey);
+        candidates.add(fullKey);
+    }
+    if (candidates.size!==1) return '';
+    const match=[...candidates][0];
+    // An explicit saved personal label belonging to somebody else wins.
+    for (const [key,label] of Object.entries(meta.names||{})) {
+        if (redirectedContactKey(meta,key)!==match && contactNameKey(label)===query) return '';
+    }
+    // Two different recorded numbers are not sufficient evidence of one person.
+    const a=savedNumber(meta,query),b=savedNumber(meta,match);
+    if (a && b && a!==b) return '';
+    return match;
+}
+
 export function resolveIdentity(meta,value) {
-    const raw = String(value || '').trim(), key = raw.toLowerCase();
-    if (!key || key.startsWith('group:')) return key;
-    const redirected = redirectedContactKey(meta,key);
-    if (redirected !== key) return redirected;
-    const wanted = contactNameKey(raw), originals = new Set(), aliases = new Set();
+    const wanted = contactNameKey(value);
+    if (!wanted || wanted.startsWith('group:')) return wanted;
+    const redirected = redirectedContactKey(meta,wanted);
+    if (redirected !== wanted) return redirected;
+    const originals = new Set(), aliases = new Set();
     const ids = meta.contactIdentities || {};
     for (const k of new Set([...Object.keys(ids), ...Object.keys(meta.names || {}), ...Object.keys(meta.handles || {})])) {
         if (k.startsWith('group:')) continue;
         const canonical = redirectedContactKey(meta,k), item = ids[k];
         if ([k,item?.originalName].some(name => name && contactNameKey(name) === wanted)) originals.add(canonical);
         const names = [meta.names?.[k], ...(Array.isArray(item?.aliases) ? item.aliases : []), meta.handles?.[k]];
-        if (names.some(name => name && (contactNameKey(name) === wanted || contactNameKey(String(name).replace(/^@+/,'')) === contactNameKey(raw.replace(/^@+/,''))))) aliases.add(canonical);
+        if (names.some(name => name && (contactNameKey(name) === wanted || contactNameKey(String(name).replace(/^@+/,'')) === contactNameKey(wanted.replace(/^@+/,''))))) aliases.add(canonical);
     }
-    // An established real name wins over someone else's personal label.
-    if (originals.size === 1) return [...originals][0];
-    if (aliases.size === 1 && !originals.size) return [...aliases][0];
-    return own(ids,key) ? key : wanted;
+    // A matching established full name, or a custom label, is stronger than a
+    // first-name shortcut (which could refer to several different people).
+    if (originals.size===1 && [...originals][0].includes(' ')) return [...originals][0];
+    if (aliases.size===1 && [...aliases][0]!==wanted) return [...aliases][0];
+    const full = uniqueFullNameMatch(meta,wanted,ids);
+    if (full) return full;
+    if (originals.size===1) return [...originals][0];
+    if (aliases.size===1) return [...aliases][0];
+    return own(ids,wanted) ? wanted : wanted;
 }
 
 function laterRead(a,b) {
@@ -60,9 +125,15 @@ export function repairContactMetadata(meta) {
             if (previous) parent.set(find(key),find(previous)); else byName.set(match,key);
         }
     }
+    // Migrate already-saved short/inflected contacts into a unique full-name
+    // identity. Never infer a match when several full names share that first name.
+    for (const key of keys) {
+        const target=resolveIdentity(meta,key);
+        if (target!==key && parent.has(target)) parent.set(find(key),find(target));
+    }
     for (const key of keys) { const root=find(key);if(!families.has(root))families.set(root,[]);families.get(root).push(key); }
     let changed = false;
-    const score = key => (meta.names?.[key] ? 1000 : 0)
+    const score = key => (fullPersonName(ids[key]?.originalName || key) ? 3000 : 0) + (meta.names?.[key] ? 1000 : 0)
         + (meta.contacts.some(c=>String(c.name||'').trim().toLowerCase()===key && c.number) ? 100 : 0)
         + (meta.avatars?.[key] ? 50 : 0) + (meta.handles?.[key] ? 30 : 0)
         + (key === contactNameKey(key) ? 10 : 0);

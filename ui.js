@@ -35,7 +35,7 @@ import {
     getSettings, getThreadList, getThread, markRead, addManualContact, hideContact,
     randomNumber, getTotalUnread, fmtTime, getRpDateTime, invalidateStoryClockCache, keyOf, getHiddenMessageIndexes, resolveContactKey, contactOriginalName,
     addGroup, delGroup, updateGroupMembers, renameContact, banAccount,
-    isSmsBlocked, blockSmsContact, unblockSmsContact, saveMeta, invalidateChatCache, getMeta, getPhoneMessageText, phoneActivityAllowed,
+    isSmsBlocked, blockSmsContact, unblockSmsContact, saveMeta, invalidateChatCache, getMeta, getPhoneMessageText, phoneActivityAllowed, scanChat,
 } from './state.js';
 import { phoneMessageSources, replacePhoneMessageTag } from './message-sources.js';
 import { roleplaySmsKey } from './roleplay-sms.js';
@@ -725,6 +725,8 @@ export function openPhone(threadKey = null) {
     // On every open, read the RP posts again; never use calendar/device/old stored time.
     invalidateStoryClockCache();
     getRpDateTime();
+    invalidateChatCache();
+    scanChat(); // Re-read RP prose messages on EVERY open, including lock screen.
     createPhone();
     applySkin();
     const ov = document.getElementById('gp-overlay');
@@ -2033,7 +2035,7 @@ function renderList(screen) {
         const preview = t.last
             ? `${senderPrefix}${esc(lastText.slice(0, 60))}`
             : '<span class="gp-prev-empty">Нет сообщений — напиши первым</span>';
-        const time = t.last && t.last.time ? fmtTime(t.last.time) : '';
+        const time = t.last?.smsClock || (t.last?.time ? fmtTime(t.last.time) : '');
         const ava = t.isGroup
             ? `<div class="gp-avatar gp-avatar-group">${ic('fa-users')}</div>`
             : avatarHtml(t.name, getContactAvatar(t.key));
@@ -2202,7 +2204,7 @@ function renderThread(screen) {
                 bubbles += `<div class="gp-day"><span>${label}</span></div>`;
             }
         }
-        const tm = m.time ? fmtTime(m.time) : '';
+        const tm = m.smsClock || (m.time ? fmtTime(m.time) : '');
         // Фото в смс: реальное (юзер приложила) или заглушка с описанием (ММС от персонажа)
         let media = '';
         if (m.img) {
@@ -2229,7 +2231,7 @@ function renderThread(screen) {
         bubbles += `
         <div class="gp-bubble-wrap ${m.dir === 'out' ? 'gp-out' : 'gp-in'}${reaction ? ' gp-has-react' : ''}">
             ${picker}
-            <div class="gp-bubble${m.voice ? ' gp-bubble-voice' : ''}" data-bmi="${mi}">${senderLabel}${media}${shotHtml(m)}${body}<button class="gp-sms-del" data-smsdel="${mi}" title="Удалить">${ic('fa-xmark')}</button>${reactChip}</div>
+            <div class="gp-bubble${m.voice ? ' gp-bubble-voice' : ''}" data-bmi="${mi}">${senderLabel}${media}${shotHtml(m)}${body}<button class="gp-sms-del" data-smsdel="${mi}" title="${m.rpInferred ? 'Скрыть SMS из телефона (сохранить RP)' : 'Удалить'}">${ic('fa-xmark')}</button>${reactChip}</div>
             ${tm ? `<div class="gp-bubble-time">${esc(tm)}</div>` : ''}
         </div>`;
     }
@@ -2275,7 +2277,7 @@ function renderThread(screen) {
         </div>
         ${_smsDraftImage ? `<div class="gp-sms-attach"><img src="${esc(_smsDraftImage)}" alt=""><span>Фото приложено</span><button class="gp-iconbtn gp-danger" id="gp-attach-clear">${ic('fa-xmark')}</button></div>` : ''}
         <div class="gp-inputbar">
-            ${t.messages.length > 0
+            ${t.messages.length > 0 && !t.messages.at(-1)?.rpInferred
                 ? `<button class="gp-iconbtn gp-regen" id="gp-regen" title="Другой ответ" ${sending ? 'disabled' : ''}>${ic('fa-rotate-right')}</button>` : ''}
             <button class="gp-iconbtn" id="gp-attach" title="Приложить фото">${ic('fa-paperclip')}</button>
             <input type="file" id="gp-attach-file" accept="image/*" style="display:none">
@@ -2518,6 +2520,17 @@ function renderThread(screen) {
         const removing = m.react === r.id;
         _reactPickerFor = null;
         logAct('реакция', `${removing ? 'снять' : r.id} · ${m.dir === 'in' ? 'входящее' : 'своё'} #${m.idx}`);
+        if (m.rpInferred) {
+            // An RP quote is not a phone tag. Keep reactions in phone metadata;
+            // do not rewrite the narrator's prose or a player's RP post.
+            const meta = getMeta();
+            if (removing) delete meta.rpSmsReactions[m.eventId];
+            else meta.rpSmsReactions[m.eventId] = r.id;
+            saveMeta();
+            if (!removing && m.dir === 'in') logSocialToChat(`${getUserName()} ставит реакцию «${r.ru}» на сообщение ${m.from || t.name}: «${String(m.text || '').slice(0,80)}»`, {priv:true});
+            render();
+            return;
+        }
         const ok = await rewriteSmsTag(m, t, (j) => {
             if (removing) delete j.react;
             else j.react = r.id;
@@ -2605,6 +2618,14 @@ function renderThread(screen) {
         const mi = parseInt(b.getAttribute('data-smsdel'));
         const msg = t.messages[mi];
         if (!msg) return;
+        if (msg.rpInferred) {
+            if (!confirm('Скрыть эту SMS из телефона? Оригинальное RP-сообщение останется без изменений.')) return;
+            getMeta().rpSmsHidden[msg.eventId] = true;
+            saveMeta();
+            render();
+            updateFabBadge();
+            return;
+        }
         if (!confirm('Удалить это сообщение? Оно уйдёт и из истории чата.')) return;
         logAct('удаление смс', `${msg.dir === 'in' ? 'входящее' : 'своё'} #${msg.idx}`);
         const ok = await deleteSmsFromChat(msg);
@@ -2631,6 +2652,8 @@ async function doRegen(key) {
     const owner = getMeta(), version = getSettings().phoneActivityVersion;
     const thread = getThread(key), last = thread?.messages.at(-1);
     if (!last) return;
+    // Rewriting an RP quotation as a phone tag would damage story text.
+    if (last.rpInferred) { toast('Это SMS из RP. Для другого текста измени исходный RP-пост.', 'fa-circle-info'); return; }
     const ctx = SillyTavern.getContext(), source = ctx.chat?.[last.idx];
     const batch = last.dir === 'in' ? thread.messages.filter(message => message.dir === 'in' && message.idx === last.idx) : [];
     const messages = thread.messages.filter(message => !batch.includes(message));

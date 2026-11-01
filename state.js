@@ -5,7 +5,7 @@ import { chat_metadata } from '../../../../script.js';
 import { extension_settings, saveMetadataDebounced } from '../../../extensions.js';
 import { saveBase64AsFile } from '../../../utils.js';
 import { readPhoneMessage } from './message-sources.js';
-import { captureRoleplaySms, extractRoleplaySms, hasMixedRoleplaySms } from './roleplay-sms.js';
+import { captureRoleplaySms, extractRoleplaySms, hasMixedRoleplaySms, extractNarrativeSms } from './roleplay-sms.js';
 import { cleanContactName, contactNameKey, redirectedContactKey, resolveIdentity, repairContactMetadata } from './contact-identity.js';
 import { discoverRpContacts } from './contact-discovery.js';
 import { isPhoneOnlyClockMessage, extractPresentRpClock, currentNarrativeDateLine, parseHtStoryClock } from './story-clock-guard.js';
@@ -13,7 +13,7 @@ import { isPhoneOnlyClockMessage, extractPresentRpClock, currentNarrativeDateLin
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '2.57.1-ness.13';
+export const GP_VERSION = '2.58.1-ness.16';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -169,6 +169,9 @@ export function getMeta() {
     if (!Array.isArray(m.contacts)) m.contacts = [];
     if (!m.lastRead || typeof m.lastRead !== 'object') m.lastRead = {};
     if (!Array.isArray(m.hidden)) m.hidden = [];
+    // Display-only controls for inferred RP SMS; never edit original RP prose.
+    if (!m.rpSmsHidden || typeof m.rpSmsHidden !== 'object' || Array.isArray(m.rpSmsHidden)) m.rpSmsHidden = {};
+    if (!m.rpSmsReactions || typeof m.rpSmsReactions !== 'object' || Array.isArray(m.rpSmsReactions)) m.rpSmsReactions = {};
     if (typeof m.narratorMode !== 'boolean') m.narratorMode = false;
     // Ники (@handle): per-chat, override поверх авто-генерации из имени
     if (!m.handles || typeof m.handles !== 'object') m.handles = {};
@@ -1261,6 +1264,24 @@ function scanChatUncached() {
     let chat = [];
     try { chat = SillyTavern.getContext()?.chat || []; } catch (e) { /* ignore */ }
 
+    const recentRpContext = []; // last two non-phone RP posts, read-only
+    // A later tagged SMS can establish a full name that an EARLIER RP post
+    // only used in a declined form. Collect identity hints before the main
+    // scan; this does NOT create contacts or expose third-party conversations.
+    const taggedNames=new Set();
+    const narrativeTextByIndex=chat.map(post=>getPhoneMessageText(post));
+    for(let n=0;n<chat.length;n++) {
+        const post=chat[n];
+        if(!post || post.is_system) continue;
+        for(const tag of narrativeTextByIndex[n].matchAll(/<!--\s*tel:(sms|out|contact):([\s\S]*?)-->/giu)) {
+            const data=safeJson(tag[2]);
+            for(const value of [data?.from,data?.to,data?.name]) {
+                if(typeof value==='string' && value.length>=2 && value.length<=100 &&
+                    !isUserName(value) && !/^(?:narrator|нарратор|рассказчик|повествователь)$/iu.test(value)) taggedNames.add(value);
+            }
+        }
+    }
+
     // Only a roleplay post with an explicit clock tag has a trustworthy time.
     // The real send_date of an SMS is not a story-time source.
 
@@ -1386,17 +1407,59 @@ function scanChatUncached() {
             }
         }
 
+        // RP prose SMS: scan on demand, without injecting instructions or
+        // writing tags into the story. This is the SAME thread/contact store as
+        // phone-generated tags; no second persistence or parallel SMS database.
+        // Explicit tags in this post take priority over equivalent prose.
+        if (!isAppJournal(msg) && !isPhoneOnlyClockMessage(msg)
+            && !(!msg.is_user && wasPhoneQuietAt(i))) {
+            const ctx = SillyTavern.getContext();
+            const parsed = extractNarrativeSms(msg, {
+                text: narrativeTextByIndex[i],
+                userNames: [ctx?.name1, '{{user}}'].filter(Boolean),
+                otherNames: [ctx?.name2, ...getMeta().contacts.map(c=>c?.name),
+                    ...(getMeta().narratorKnownActors||[]).map(c=>c?.name),...taggedNames,
+                    ...Array.from(contacts.values(),c=>c.name)].filter(Boolean),
+                mainCharacterName: ctx?.name2 || '',
+                narratorMode: getMeta().narratorMode === true,
+                priorContext: recentRpContext.join('\n').slice(-900),
+            });
+            for (const found of parsed) {
+                // Do not invent actions by the player's persona from narrator
+                // output. Outgoing RP SMS require a user-authored post.
+                if (found.dir === 'out' && !msg.is_user) continue;
+                const key = resolveContactKey(found.peer);
+                if (found.dir === 'in' && wasSmsBlockedAt(key,i)) continue;
+                const eventId = `${i}:${found.sourceOffset}`; // existing read-cursor format idx:offset
+                if (getMeta().rpSmsHidden[eventId]) continue;
+                const entry = {
+                    dir: found.dir, text: found.text, idx: i, time,
+                    from: found.dir === 'in' ? found.from : undefined,
+                    tagStart: found.sourceOffset, // numeric position for unread/sorting only; no tagEnd/tagText
+                    eventId, rpInferred: true, smsClock: found.smsClock || '', react: getMeta().rpSmsReactions[eventId] || null,
+                    // No tagStart / tagText: this RP narration must remain
+                    // untouched by edit/reaction/delete actions.
+                };
+                pushMsg(found.peer,entry);
+                addContact(found.peer,'','rp-sms',true);
+            }
+        }
+
         // RP contacts are independent from the phone-tag protocol and prompt
         // injection. Both player and narrator posts can establish an exchange.
         // Phone-only messages/journals are excluded from the RP evidence path.
         if (!isAppJournal(msg) && !isPhoneOnlyClockMessage(msg)) {
             const context = SillyTavern.getContext();
-            const evidence = discoverRpContacts({ ...msg, mes: getPhoneMessageText(msg) }, {
+            const evidence = discoverRpContacts({ ...msg, mes: narrativeTextByIndex[i] }, {
                 userName: context?.name1 || '',
                 mainCharacterName: context?.name2 || '',
                 narratorMode: getMeta().narratorMode === true,
             });
             for (const entry of evidence) addContact(entry.name, entry.number, entry.source, entry.numberKnown);
+        }
+        if (!msg.is_system && !isAppJournal(msg) && !isPhoneOnlyClockMessage(msg)) {
+            recentRpContext.push(narrativeTextByIndex[i].slice(-750));
+            if(recentRpContext.length>2) recentRpContext.shift();
         }
 
     }
@@ -1418,18 +1481,45 @@ function scanChatUncached() {
         }
     }
 
-    // ── Скрытые треды: прячем контакт, если после скрытия не появилось новых смс ──
-    for (const h of meta.hidden) {
-        if (!h || !h.key) continue;
-        const t = threads.get(h.key);
-        const lastIdx = t && t.messages.length > 0 ? t.messages[t.messages.length - 1].idx : -1;
-        if (lastIdx <= (h.atIdx ?? -1)) {
-            threads.delete(h.key);
-            contacts.delete(h.key);
+
+    // All names have now been discovered, including full names appearing
+    // later in the chat than a shortened variant. Reconcile identity once,
+    // then re-key BOTH the contact list and SMS history without losing events.
+    // This is the same canonical identity mechanism used by calls and avatars.
+    if (repairContactMetadata(meta)) saveMeta();
+    const unifiedContacts = new Map();
+    for (const [oldKey, entry] of contacts) {
+        const k = oldKey.startsWith('group:') ? oldKey : resolveIdentity(meta,oldKey);
+        const existing = unifiedContacts.get(k);
+        if (!existing) unifiedContacts.set(k, {...entry,name:contactOriginalName(k,entry.name)});
+        else {
+            if (!existing.number && entry.number) existing.number=entry.number;
+            existing.numberKnown ||= entry.numberKnown;
         }
     }
-
-    return { contacts, threads };
+    const unifiedThreads = new Map();
+    for (const [oldKey, thread] of threads) {
+        const k = oldKey.startsWith('group:') ? oldKey : resolveIdentity(meta,oldKey);
+        const existing = unifiedThreads.get(k);
+        if (!existing) unifiedThreads.set(k,{...thread,messages:[...thread.messages]});
+        else existing.messages.push(...thread.messages);
+    }
+    for (const thread of unifiedThreads.values()) {
+        thread.messages.sort((a,b)=>(a.idx-b.idx)||((a.tagStart??0)-(b.tagStart??0)));
+    }
+    // Hidden-state filtering must happen AFTER aliases have been unified;
+    // otherwise a hidden short-name thread can reappear under the full name.
+    for (const hidden of meta.hidden) {
+        if (!hidden?.key) continue;
+        const k = hidden.key.startsWith('group:') ? hidden.key : resolveIdentity(meta,hidden.key);
+        const t = unifiedThreads.get(k);
+        const lastIdx = t?.messages.length ? t.messages[t.messages.length - 1].idx : -1;
+        if (lastIdx <= (hidden.atIdx ?? -1)) {
+            unifiedThreads.delete(k);
+            unifiedContacts.delete(k);
+        }
+    }
+    return { contacts:unifiedContacts, threads:unifiedThreads };
 }
 
 // ── Список для экрана «Сообщения»: контакты + треды, отсортированы по свежести ──
