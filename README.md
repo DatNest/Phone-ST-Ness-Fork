@@ -1,23 +1,4 @@
 # Phone-ST-Ness-Fork
-## Ness v2.58.1 — universal RP SMS previews (built on v2.58.0)
-
-- **One existing scanner and one SMS/contact store** recognize prose, quoted
-  text, Markdown blockquotes, time/sender headers, emoji-decorated names,
-  multi-line notifications, and explicitly labelled sender/recipient/text fields.
-- Scans again whenever the phone is opened; no prompt injection, new account
-  configuration, or message-writing by the model is required.
-- A notification is imported only when the **player owns the relevant phone**
-  or is the explicit recipient. Unrelated NPC conversations, ordinary quotes,
-  drafts and text in code/thinking blocks are rejected.
-- Canonical identity matching uses the existing contact registry; cosmetic
-  emoji do not create duplicate contacts. A sender's time label is displayed
-  on the SMS bubble without changing the current story clock.
-- Preserves existing tags, interactions, RP history, read receipts, and the
-  prior SMS styles. Limit: no deterministic parser can infer a recipient from
-  truly ambiguous prose or an unlabeled snippet with no phone context.
-- Tests: `node --test tests/rp-sms.test.mjs` and
-  `node --experimental-vm-modules --test tests/state-formatted.mjs`
-
 ## Ness v2.58.0 — RP SMS ↔ phone synchronization
 
 - On **every phone open**, rescan saved roleplay posts (including narrator cards)
@@ -36,3 +17,24 @@
 - No invented phone numbers, manual new-account registration, or messages
   authored on the user's behalf by a narrator.
 - Automated source-only tests: `node --test tests/rp-sms.test.mjs`.
+
+
+### RP → Social synchronisation (v2.59.0)
+
+Opening the phone or receiving/editing RP messages re-scans **saved RP posts** for
+confirmed social activity. In addition to existing `tel:tweet`, `tel:insta`,
+`tel:chan` tags, explicitly published or seen posts can be recognized from
+ordinary prose. X, Instagram and named news/channel sources share their
+existing app data stores. Quoted content is preferred; a concretely described
+photo or an attributed news summary can also be imported. Vague references
+with no identifiable author/source or content are skipped, not invented.
+
+The same source post is only imported once, including after restarting or
+re-opening the phone. Substantially similar content by the same author on the
+same platform is suppressed. RP-established posts survive regular feed refresh;
+AI-generated posts are also compared against existing ones.
+
+Phone contacts and RP SMS still use the canonical identity/thread store;
+confirmed prose SMS and `tel:sms` duplicates are reconciled. The player is not
+made to post by narrator-authored text. No main-chat prompt injection is
+required. This parser does not automatically draw images from descriptions.

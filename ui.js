@@ -43,7 +43,7 @@ import { updatePhoneInjection } from './prompts.js';
 import { getBank, fmtMoney, addTransaction, getBankReminders, bankBadgeCount, harvestBankTags } from './bank.js';
 import { getShop, catById, getCategory, generateCategory, buyItem, findShopItem, getOrders, deleteOrder, advanceOrders, orderLeft, fmtEta, findOrder, ensureCourier, orderChat, courierUnread, markCourierRead, writeToCourier, courierArrived } from './shop.js';
 import {
-    getTweets, getIgPosts, postTweet, likeTweet, rtTweet, delTweet, addTweetReply, delTweetReply,
+    getTweets, getIgPosts, harvestSocialTags, postTweet, likeTweet, rtTweet, delTweet, addTweetReply, delTweetReply,
     postIg, likeIg, delIg, addIgComment, delIgComment,
     getOfPosts, postOf, likeOf, delOf, addOfComment, delOfComment, generateOfComments, getSocial,
     migrateOfWallet, ofIsText,
@@ -63,7 +63,7 @@ import {
 import { getSystemsView, deferEvent, declineEvent, selectStoryEvent, acceptAdOffer, declineAdOffer, attachActiveAd, getReputationStatus } from './social-events.js';
 import { maybeScamSms } from './scam.js';
 import {
-    getChannels, allChannels, findChannel, findChanPost, createMyChannel, deleteMyChannel,
+    getChannels, allChannels, harvestChannelTags, findChannel, findChanPost, createMyChannel, deleteMyChannel,
     addFoundChannels, addPersonChannel, toggleSubscribe, deleteChannel, addChannelPosts, publishToMyChannel,
     deleteChanPost, toggleComments, toggleReact, addReacts, addComments, addMyComment,
     deleteComment, bumpViews, addSubs, matchPostByText, markChannelRead, unreadChannels,
@@ -727,6 +727,11 @@ export function openPhone(threadKey = null) {
     getRpDateTime();
     invalidateChatCache();
     scanChat(); // Re-read RP prose messages on EVERY open, including lock screen.
+    // Read explicit and prose RP social evidence into existing app feeds.
+    // This does not inject RP instructions, invent posts or duplicate messages.
+    try { harvestSocialTags(); harvestChannelTags(); } catch(error) {
+        console.warn('[GlassPhone] RP social sync on open:', error);
+    }
     createPhone();
     applySkin();
     const ov = document.getElementById('gp-overlay');
@@ -2035,7 +2040,7 @@ function renderList(screen) {
         const preview = t.last
             ? `${senderPrefix}${esc(lastText.slice(0, 60))}`
             : '<span class="gp-prev-empty">Нет сообщений — напиши первым</span>';
-        const time = t.last?.smsClock || (t.last?.time ? fmtTime(t.last.time) : '');
+        const time = t.last && t.last.time ? fmtTime(t.last.time) : '';
         const ava = t.isGroup
             ? `<div class="gp-avatar gp-avatar-group">${ic('fa-users')}</div>`
             : avatarHtml(t.name, getContactAvatar(t.key));
@@ -2204,7 +2209,7 @@ function renderThread(screen) {
                 bubbles += `<div class="gp-day"><span>${label}</span></div>`;
             }
         }
-        const tm = m.smsClock || (m.time ? fmtTime(m.time) : '');
+        const tm = m.time ? fmtTime(m.time) : '';
         // Фото в смс: реальное (юзер приложила) или заглушка с описанием (ММС от персонажа)
         let media = '';
         if (m.img) {

@@ -126,7 +126,6 @@ function rpAliasMatch(fragment, name) {
     if (f===n) return true;
     const first=n.split(' ')[0];
     if (f===first) return true;
-    if (first.endsWith('ия') && f===first.slice(0,-1)+'и') return true;
     // Only resolve declined first names from a known original. No arbitrary
     // suffix-stripping on unidentified people (which can merge distinct NPCs).
     if (first.length < 4 || !/^[а-яё]+$/iu.test(first)) return false;
@@ -255,162 +254,11 @@ function rpPartyContext(pre,following,options) {
     if(senderUser===recipientUser) return null; // NPC↔NPC conversations are not the player's SMS.
     return { dir:senderUser?'out':'in', peer:senderUser?recipient:sender, from:sender, to:recipient };
 }
-// Structured message previews (notification, screenshot, messenger transcript).
-// This is an additional input format for the SAME RP SMS evidence pipeline,
-// not a parallel store. Require a credible phone context and an identified
-// player-owned device/recipient: a formatted quote alone is not an SMS.
-const RP_CLOCK_STAMP = String.raw`(?:[01]?\d|2[0-3]):[0-5]\d`;
-const RP_FORMAT_HEADER = [
-    new RegExp(String.raw`^(?:\[(${RP_CLOCK_STAMP})\]|(${RP_CLOCK_STAMP}))\s*(?:[|·•—–-]\s*)?(.{2,100}?)\s*[:—–]\s*(.+)$`, 'u'),
-    new RegExp(String.raw`^(.{2,100}?)\s*(?:[|·•—–-]|\()\s*(${RP_CLOCK_STAMP})\)?\s*[:—–]\s*(.+)$`, 'u'),
-];
-function rpFormattedHeader(line) {
-    const quoted = /^\s*>/.test(line);
-    const formatted = /^\s*(?:>\s*)*(?:[-•]\s*)?(?:\*\*|__|`|📩|✉️|📱|💬)/u.test(line);
-    const stripped = line.replace(/^\s*(?:>\s*)+/, '').replace(/^\s*[-•]\s+/, '').trim();
-    // Remove markdown decoration from the header WITHOUT changing the body.
-    // Colon after an HH:mm timestamp is not a message delimiter.
-    const clean = stripped.replace(/\*\*|__|`|_/g, '').replace(/^\s*(?:📩|✉️|📱|💬)\s*/u, '').trim();
-    let name='',body='',stamp='';
-    const match1=clean.match(RP_FORMAT_HEADER[0]);
-    const match2=!match1?clean.match(RP_FORMAT_HEADER[1]):null;
-    if(match1) {stamp=match1[1]||match1[2]||'';name=match1[3];body=match1[4];}
-    else if(match2){name=match2[1];stamp=match2[2];body=match2[3];}
-    else {
-        const plain=clean.match(/^(.{2,100}?)\s*:\s*(\S.*)$/u);
-        if(!plain || !quoted && !formatted) return null;
-        name=plain[1];body=plain[2];
-    }
-    // These are display names, not IDs. Emoji and cosmetic markdown are not
-    // part of the canonical character identity (but remain in RP source).
-    name=name.replace(/[\p{Extended_Pictographic}\p{Emoji_Modifier}\uFE0F\u200D\u20E3]/gu,' ')
-        .replace(/^[\s*`_'"«»]+|[\s*`_'"«»]+$/gu,'').replace(/\s+/gu,' ').trim();
-    body=body.replace(/^\s*(?:\*\*|__|`)+\s*/u,'').trim();
-    if(!name || !body || name.length>100 || body.length>1200 || /^(?:от|кому|время|текст|сообщение|отправитель|автор|from|to|time|text|body|sender)$/iu.test(name)) return null;
-    const directed=name.match(/^(.+?)\s*(?:→|->)\s*(.+)$/u);
-    return {name:directed?directed[1].trim():name,to:directed?directed[2].trim():'',body,stamp,quoted,formatted};
-}
-function rpPhoneOwner(text, names) {
-    // Most recent explicit device owner takes precedence. Do not consider an
-    // unrelated character mentioned earlier in a paragraph the phone owner.
-    const pattern=new RegExp(String.raw`(?:[Тт]елефон[еиауом]*|[Сс]мартфон[еиауом]*|[Ээ]кран[еиауом]*)\s+(?:у\s+)?(${RP_NAME})|(?:[Уу]\s+(${RP_NAME})\s+(?:на\s+)?(?:телефон[еиауом]*|смартфон[еиауом]*))`, 'gu');
-    let owner='';
-    for(const found of text.matchAll(pattern)){
-        const candidate=rpActor(found[1]||found[2],names);
-        if(candidate) owner=candidate;
-    }
-    return owner;
-}
-function extractFormattedSms(masked, message, options, original='') {
-    const results=[];
-    const users=(options.userNames||[]).filter(v=>v && !/^\{\{|^user$/iu.test(v));
-    const other=(options.otherNames||[]).filter(v=>v && !RP_NOISE.test(v));
-    const names=[...new Set([...users,...other].map(rpName).filter(Boolean))];
-    const lines=masked.split('\n');
-    const offsets=[];let offset=0;
-    for(const line of lines){offsets.push(offset);offset+=line.length+1;}
-    for(let i=0;i<lines.length;i++){
-        const line=lines[i];
-        const start=offsets[i];
-        // Labelled phone notifications are also common in roleplay:
-        // SMS / От: Имя / Кому: Имя / Текст: ... . Unlike an e-mail, this
-        // requires an explicit phone cue and an identified player recipient.
-        const fromLine=line.replace(/^\s*>\s*/, '').trim().match(/^(?:от|отправитель|from|sender)\s*:\s*(.+)$/iu);
-        if(fromLine){
-            const context=masked.slice(Math.max(0,start-350),start);
-            const labelBlock=lines.slice(i+1,i+5).map(x=>x.replace(/^\s*>\s*/, '').trim());
-            const toLine=labelBlock.find(x=>/^(?:кому|получатель|to|recipient)\s*:/iu.test(x));
-            const bodyLine=labelBlock.find(x=>/^(?:текст|сообщение|sms|message|body)\s*:/iu.test(x));
-            const timeLine=labelBlock.find(x=>/^(?:время|time)\s*:/iu.test(x));
-            const mobileCue=RP_MOBILE.test(context) || /(?:sms|смс|уведомлени|входящ|messenger|мессенджер)/iu.test(context);
-            if(toLine && bodyLine && mobileCue && !/(?:e-mail|email|электронн(?:ая|ой)\s+почт)/iu.test(context.slice(-150))){
-                const from=rpActor(fromLine[1].replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu,' ').trim(),names);
-                const to=rpActor(toLine.replace(/^[^:]+:\s*/,''),names);
-                const text=normalizePhoneSpaces(bodyLine.replace(/^[^:]+:\s*/,'')).trim();
-                const fromUser=users.some(u=>rpAliasMatch(from,u));
-                const toUser=users.some(u=>rpAliasMatch(to,u));
-                if(from && to && fromUser!==toUser && (!fromUser || message.is_user) &&
-                    text && text.length<=1200 && !RP_UNSENT.test(context.slice(-150))){
-                    const dir=fromUser?'out':'in', peer=fromUser?to:from;
-                    const alreadyTagged=[...original.matchAll(/<!--\s*tel:(sms|out):([\s\S]*?)-->/giu)].some(m=>{
-                        const d=parse(m[2]);return d && normalizePhoneSpaces(d.text||'').trim()===text &&
-                            m[1].toLowerCase()===(dir==='in'?'sms':'out') &&
-                            rpAliasMatch(String(dir==='in'?d.from:(d.to||d.contactKey)||''),peer);
-                    });
-                    if(!alreadyTagged){
-                        const stamp=timeLine?.match(/(?:[01]?\d|2[0-3]):[0-5]\d/u)?.[0]||'';
-                        results.push({dir,peer,from,to,text,smsClock:stamp,
-                            eventId:`rp:${start}:formatted`,sourceOffset:start});
-                    }
-                    continue;
-                }
-            }
-        }
-        const header=rpFormattedHeader(line);
-        if(!header) continue;
-        const sender=rpActor(header.name,names);
-        if(!sender) continue;
-        const context=masked.slice(Math.max(0,start-760),start);
-        const lastContext=context.slice(-550);
-        const mobileCue=RP_MOBILE.test(lastContext) || /(?:уведомлени|notification|inbox|входящ|непрочитан|отправленн|доставленн|переписка|messenger)/iu.test(lastContext);
-        if(!mobileCue) continue;
-        // The device owner must be explicitly identified; any other device
-        // owner's SMS must never land in the player's private phone.
-        const owner=rpPhoneOwner(lastContext,names);
-        const targeted=header.to?rpActor(header.to,names):'';
-        const userMention=users.filter(user=>rpMention(lastContext,user));
-        const ownDevice=owner && users.some(u=>rpAliasMatch(owner,u));
-        const incomingToUser=targeted && users.some(u=>rpAliasMatch(targeted,u));
-        const recipientByProse=!owner && userMention.length===1 &&
-            /(?:получил[аи]?|увидел[аи]?|прочитал[аи]?)\s+(?:\S+\s+){0,3}(?:смс|sms|сообщени|уведомлени)|(?:сообщени[еяию]|уведомлени[еяию]|sms|text)\s+(?:для|на\s+телефон)|(?:для|кому)\s+[\p{Lu}]/iu.test(lastContext);
-        if(owner && !ownDevice && !incomingToUser) continue;
-        if(targeted && !incomingToUser && !users.some(u=>rpAliasMatch(sender,u))) continue;
-        // An incoming phone notification must concern the player's own phone.
-        // A user-authored outgoing transcript also requires a named recipient.
-        let dir='',peer='',recipient='';
-        if(users.some(u=>rpAliasMatch(sender,u))){
-            if(!message.is_user || !targeted || users.some(u=>rpAliasMatch(targeted,u))) continue;
-            dir='out';peer=targeted;recipient=targeted;
-        }else{
-            if(!ownDevice && !incomingToUser && !recipientByProse) continue;
-            dir='in';peer=sender;recipient=targeted||owner||users.find(u=>rpMention(lastContext,u))||'';
-            if(!recipient || !users.some(u=>rpAliasMatch(recipient,u))) continue;
-        }
-        if(RP_UNSENT.test(lastContext.slice(-150))) continue;
-        // Continuation is only taken from visibly indented/quoted lines, so a
-        // subsequent narrative paragraph never becomes part of the SMS body.
-        let body=header.body;
-        let next=i+1;
-        while(next<lines.length && body.length<1200){
-            const continuation=lines[next];
-            if(!continuation.trim() || rpFormattedHeader(continuation)) break;
-            if(!/^\s*>\s*\S/u.test(continuation)) break;
-            body+='\n'+continuation.replace(/^\s*>\s*/, '').trim();
-            next++;
-        }
-        body=normalizePhoneSpaces(body).trim();
-        if(!body || body.length>1200) continue;
-        // Explicit protocol tags remain authoritative, including phone SMS
-        // saved before this narrative scanner existed.
-        const alreadyTagged=[...original.matchAll(/<!--\s*tel:(sms|out):([\s\S]*?)-->/giu)].some(match=>{
-            const data=parse(match[2]);
-            if(!data || normalizePhoneSpaces(data.text||'').trim()!==body ||
-                match[1].toLowerCase()!==(dir==='in'?'sms':'out')) return false;
-            return rpAliasMatch(String(dir==='in'?data.from:(data.to||data.contactKey)||''),peer);
-        });
-        if(alreadyTagged) continue;
-        results.push({dir,peer,from:sender,to:recipient,text:body,smsClock:header.stamp||'',
-            eventId:`rp:${start}:formatted`,sourceOffset:start});
-        i=next-1;
-    }
-    return results;
-}
-
 export function extractNarrativeSms(message, options={}) {
     if(!message || message.is_system || message.name==='GlassPhone' || message.extra?.model==='GlassPhone') return [];
     const raw=String(options.text ?? message.mes ?? '');
     // Scanning phone-generated source again must never create an RP duplicate.
-    if(!raw) return [];
+    if(!raw || (!RP_SEND.test(raw) && !RP_RECEIVE.test(raw))) return [];
     const masked=raw.replace(/<(?:think|thinking|reasoning|analysis)[^>]*>[\s\S]*?<\/(?:think|thinking|reasoning|analysis)>/giu,' ')
         .replace(RP_TEL_TAG,' ').replace(/```[\s\S]*?```/gu,' ')
         .replace(/\[(?:СМС|SMS|Голосовое|Voice)\s*(?:→|в\s+чат|to\s+chat)[^\]]*\][^\n]*/giu,' ');
@@ -492,15 +340,6 @@ export function extractNarrativeSms(message, options={}) {
         });
         if(explicitlyTagged) continue;
         results.push({...parties,text,eventId:`rp:${m.index}:${results.length}`,sourceOffset:m.index});
-    }
-    // Both narrative SMS and formatted phone previews feed the same thread
-    // store. If the same event was written both as prose and as a styled
-    // preview, keep its earliest occurrence rather than showing two bubbles.
-    for(const event of extractFormattedSms(masked,message,options,raw)){
-        const same=results.some(r=>r.dir===event.dir && rpAliasMatch(r.peer,event.peer) &&
-            normalizePhoneSpaces(r.text)===normalizePhoneSpaces(event.text) &&
-            Math.abs(r.sourceOffset-event.sourceOffset)<1100);
-        if(!same) results.push(event);
     }
     results.sort((a,b)=>a.sourceOffset-b.sourceOffset);
     return results;

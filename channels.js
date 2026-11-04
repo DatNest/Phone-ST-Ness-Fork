@@ -1,9 +1,11 @@
 import { isPhoneAppInstalled } from './state.js';
 import { parsePhoneJson } from './phone-text.js';
+import { extractNarrativeSocial, sameSocialPost } from './roleplay-social.js';
+import { roleplayCast } from './narrator-context.js';
 // Каналы: свой и чужие, посты с реакциями, просмотрами и обсуждением.
 // Данные лежат per-chat в meta; генерация — по кнопкам и после своих постов.
 
-import { getMeta, saveMeta, keyOf, stripThink, getSettings, getPhoneActivityText as getPhoneMessageText } from './state.js';
+import { getMeta, saveMeta, keyOf, stripThink, getSettings, getPhoneActivityText as getPhoneMessageText, isAppJournal } from './state.js';
 import { logSocialToChat, getUserName, getUserHandle, resolveAuthorKey, isUserAuthor } from './social.js';
 import { getBank, addTransaction, fmtMoney } from './bank.js';
 
@@ -348,9 +350,17 @@ export function deleteChannel(id) {
 export function addChannelPosts(id, arr, { fromTag = false } = {}) {
     const ch = findChannel(id);
     if (!ch) return 0;
-    const fresh = normalizePosts(arr);
+    const prior=ch.posts||[];
+    const allowed=[];
+    for(const item of (Array.isArray(arr)?arr:[])){
+        const candidate=String(item?.text||item?.photo||'').trim();
+        if(!candidate || prior.some(post=>sameSocialPost(candidate,post.text||post.imgDesc||'')))continue;
+        if(allowed.some(post=>sameSocialPost(candidate,post.text||post.photo||'')))continue;
+        allowed.push(item);
+    }
+    const fresh=normalizePosts(allowed);
     if (!fresh.length) return 0;
-    ch.posts = [...fresh, ...(ch.posts || [])].slice(0, 40);
+    ch.posts = [...fresh, ...prior].slice(0, 40);
     if (ch.subscribed) ch.unread = (ch.unread || 0) + fresh.length;
     saveMeta();
     logSocialToChat(
@@ -638,9 +648,11 @@ export function harvestChannelTags() {
     if (!isPhoneAppInstalled('chans')) return 0;
     const c = getChannels();
     if (!Array.isArray(c.seenTags)) c.seenTags = [];
+    if (!Array.isArray(c.seenRpNarrative)) c.seenRpNarrative = [];
     let chat = [];
     try { chat = SillyTavern.getContext()?.chat || []; } catch (e) { return { n: 0, names: [] }; }
     const seen = new Set(c.seenTags);
+    const initialTags=c.seenTags.length, initialRp=c.seenRpNarrative.length;
     const names = [];
     for (let i = 0; i < chat.length; i++) {
         const msg = chat[i];
@@ -664,8 +676,34 @@ export function harvestChannelTags() {
             if (added) names.push(added);
         }
     }
+    // Ordinary RP prose about published/seen news uses the SAME channel
+    // storage and the SAME deduplication as explicit tel:chan tags.
+    const ctx=SillyTavern.getContext();
+    const roster=[...(getMeta().contacts||[]).map(x=>x.name),
+        ...(getMeta().narratorKnownActors||[]).map(x=>x.name),
+        ...roleplayCast().map(x=>x.name),ctx?.name2].filter(Boolean);
+    const recorded=new Set(c.seenRpNarrative);
+    for(let i=0;i<chat.length;i++) {
+        const msg=chat[i];
+        if(!msg||msg.is_system||isAppJournal(msg))continue;
+        const source=getPhoneMessageText(msg,i);
+        if(!source)continue;
+        for(const ev of extractNarrativeSocial(msg,{
+            text:stripThink(source),knownActors:roster,userNames:[ctx?.name1].filter(Boolean),
+            isUserPost:!!msg.is_user,defaultAuthor:msg.name,
+            narratorMode:getMeta().narratorMode===true,
+        })) {
+            if(ev.platform!=='channel'||isUserAuthor(ev.author))continue;
+            const sig=`rn:${String(msg.send_date||msg.extra?.gen_id||i)}:${keyOf(ev.author)}:${hash32(ev.text)}`;
+            if(recorded.has(sig))continue;
+            recorded.add(sig);c.seenRpNarrative.push(sig);
+            const added=applyChannelTag({channel:ev.author,author:ev.author,text:ev.text});
+            if(added)names.push(added);
+        }
+    }
+    if(c.seenRpNarrative.length>1500)c.seenRpNarrative=c.seenRpNarrative.slice(-1500);
     if (c.seenTags.length > 300) c.seenTags = c.seenTags.slice(-300);
-    saveMeta();
+    if(names.length || c.seenTags.length!==initialTags || c.seenRpNarrative.length!==initialRp)saveMeta();
     return { n: names.length, names: [...new Set(names)] };
 }
 

@@ -8,12 +8,13 @@ import { readPhoneMessage } from './message-sources.js';
 import { captureRoleplaySms, extractRoleplaySms, hasMixedRoleplaySms, extractNarrativeSms } from './roleplay-sms.js';
 import { cleanContactName, contactNameKey, redirectedContactKey, resolveIdentity, repairContactMetadata } from './contact-identity.js';
 import { discoverRpContacts } from './contact-discovery.js';
+import { sameSocialPost, normalizeSocialText } from './roleplay-social.js';
 import { isPhoneOnlyClockMessage, extractPresentRpClock, currentNarrativeDateLine, parseHtStoryClock } from './story-clock-guard.js';
 
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '2.58.1-ness.16';
+export const GP_VERSION = '2.59.0-ness.16';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -941,9 +942,10 @@ const OUT_VISIBLE_RE = /\[(СМС|SMS|Голосовое|Voice)\s*→\s*([^\]]+)
 const OUT_VISIBLE_GROUP_RE = /\[(СМС|SMS|Голосовое|Voice)\s+(?:в\s+чат|to\s+chat)\s*[«"]([^»"]+)[»"]\]\s*([\s\S]*)/i;
 const VOICE_KIND_RE = /^(голосовое|voice)$/i;
 
-// Смс попадают в телефон ТОЛЬКО из явных tel:sms тегов — это наш протокол,
-// модель ставит их осознанно. Эвристики «чей телефон» и бэктик-парсер прозы
-// удалены: от тегов внутри CoT защищает stripThink, от адресованных боту — j.to.
+// SMS are imported from explicit tel:sms tags and carefully identified RP
+// prose. Both paths are merged into the same contact/thread store; incoming
+// messages must be addressed to the player, not to another NPC. stripThink
+// prevents tags inside private reasoning from becoming real phone activity.
 
 // RP phone-number exchanges are parsed by contact-discovery.js.
 // Do not match arbitrary digit sequences or use the narrator as a sender.
@@ -1436,7 +1438,7 @@ function scanChatUncached() {
                     dir: found.dir, text: found.text, idx: i, time,
                     from: found.dir === 'in' ? found.from : undefined,
                     tagStart: found.sourceOffset, // numeric position for unread/sorting only; no tagEnd/tagText
-                    eventId, rpInferred: true, smsClock: found.smsClock || '', react: getMeta().rpSmsReactions[eventId] || null,
+                    eventId, rpInferred: true, react: getMeta().rpSmsReactions[eventId] || null,
                     // No tagStart / tagText: this RP narration must remain
                     // untouched by edit/reaction/delete actions.
                 };
@@ -1506,6 +1508,29 @@ function scanChatUncached() {
     }
     for (const thread of unifiedThreads.values()) {
         thread.messages.sort((a,b)=>(a.idx-b.idx)||((a.tagStart??0)-(b.tagStart??0)));
+        // A single RP event can be represented both as prose and as a
+        // tel:sms tag, possibly under a short/full contact alias. Keep one
+        // bubble. Do not collapse brief, legitimately repeated replies in
+        // different RP turns ("ок", "да", etc.).
+        const unique=[];
+        for (const entry of thread.messages) {
+            const normalized=normalizeSocialText(entry.text);
+            const doubled=unique.some(previous => {
+                if(previous.dir!==entry.dir) return false;
+                if(!previous.rpInferred && !entry.rpInferred && previous.eventId !== entry.eventId) return false;
+                if(Boolean(previous.voice)!==Boolean(entry.voice)
+                   || Boolean(previous.img)!==Boolean(entry.img)
+                   || Boolean(previous.shot)!==Boolean(entry.shot))return false;
+                const distance=Math.abs(previous.idx-entry.idx);
+                if(distance>2) return false;
+                const prevText=normalizeSocialText(previous.text);
+                if(!normalized||!prevText)return false;
+                if(distance===0)return normalized===prevText || (normalized.length>=28 && sameSocialPost(normalized,prevText));
+                return normalized.length>=24 && prevText.length>=24 && sameSocialPost(normalized,prevText);
+            });
+            if(!doubled)unique.push(entry);
+        }
+        thread.messages=unique;
     }
     // Hidden-state filtering must happen AFTER aliases have been unified;
     // otherwise a hidden short-name thread can reappear under the full name.

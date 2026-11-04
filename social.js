@@ -21,6 +21,7 @@ import { logReq, logOk, logFail } from './debug-log.js';
 import { addIgActivity } from './instagram-state.js';
 import { narratorMode, narratorGuidance, roleplayCast } from './narrator-context.js';
 import { socialPromptExtras } from './social-prompt-overrides.js';
+import { extractNarrativeSocial, sameSocialPost } from './roleplay-social.js';
 
 function requirePhoneApp(app) {
     if (!isPhoneAppInstalled(app)) throw Object.assign(new Error('Приложение удалено. Его можно установить в App Store.'), { name: 'AbortError' });
@@ -52,6 +53,7 @@ export function getSocial() {
     if (typeof s.ofEarned !== 'number') s.ofEarned = 0;
     if (typeof s.ofWallet !== 'number') s.ofWallet = 0; // прежний кошелёк: один раз переезжает в банк (migrateOfWallet)
     if (!Array.isArray(s.seenTags)) s.seenTags = [];
+    if (!Array.isArray(s.seenRpNarrative)) s.seenRpNarrative = [];
     if (!s.accountProfiles || typeof s.accountProfiles !== 'object' || Array.isArray(s.accountProfiles)) s.accountProfiles = {};
     if (!s.accountAvatars || typeof s.accountAvatars !== 'object' || Array.isArray(s.accountAvatars)) s.accountAvatars = {};
     // One-time migration of older feed entries into durable account memory.
@@ -399,6 +401,31 @@ export function isUserAuthor(name) {
     return !!k && k === keyOf(stripHandle(makeHandle(getUserName())));
 }
 
+// One comparison for tagged, inferred and AI-generated entries. The contact key
+// (rather than display name) handles personal nicknames and aliases.
+function sameAuthorForFeed(a, b) {
+    const identity = item => item?.ak && item.ak !== 'random'
+        ? item.ak : resolveAuthorKey(item?.author || '');
+    const aKey=identity(a), bKey=identity(b);
+    if(aKey !== 'random' && bKey !== 'random') return aKey === bKey;
+    return keyOf(a?.author) === keyOf(b?.author);
+}
+function alreadyInFeed(list, candidate) {
+    return list.some(post => {
+        if(!sameAuthorForFeed(post,candidate))return false;
+        // Compare the relevant field, not a caption on one side and a photo
+        // description on the other. Either matching caption OR matching visual
+        // subject is sufficient for an Instagram duplicate.
+        if(post.text || candidate.text)return sameSocialPost(post.text,candidate.text);
+        return (post.caption && candidate.caption && sameSocialPost(post.caption,candidate.caption))
+            || (post.imgDesc && candidate.imgDesc && sameSocialPost(post.imgDesc,candidate.imgDesc));
+    });
+}
+function rpEventFingerprint(message, idx, event) {
+    const stable=String(message?.send_date || message?.extra?.gen_id || idx);
+    return `rp:${stable}:${event.platform}:${hash32(keyOf(event.author)+'|'+event.text+'|'+event.photo)}`;
+}
+
 // Возвращает {tweets, posts} — сколько нового добавлено (для тостов)
 export function harvestSocialTags() {
     const s = getSocial();
@@ -441,6 +468,7 @@ export function harvestSocialTags() {
             const j = safeJson(m[1]);
             if (!j || !j.author || !j.text) continue;
             if (isUserAuthor(j.author)) continue;   // её твиты пишет она сама
+            if (alreadyInFeed(s.tweets, { author: j.author, text: j.text, ak: resolveAuthorKey(j.author) })) continue;
             const tw = {
                 id: genId(), author: String(j.author), handle: j.handle || makeHandle(j.author),
                 ak: resolveAuthorKey(j.author), text: String(j.text).slice(0, 280),
@@ -479,6 +507,7 @@ export function harvestSocialTags() {
             const j = safeJson(m[1]);
             if (!j || !j.author || (!j.caption && !j.photo)) continue;
             if (isUserAuthor(j.author)) continue;   // её посты пишет она сама
+            if (alreadyInFeed(s.igPosts, { author: j.author, caption: j.caption, imgDesc: j.photo, ak: resolveAuthorKey(j.author) })) continue;
             s.igPosts.unshift({
                 id: genId(), author: String(j.author), ak: resolveAuthorKey(j.author),
                 image: null, imgDesc: String(j.photo || '').slice(0, 200),
@@ -490,11 +519,61 @@ export function harvestSocialTags() {
         }
     }
 
+    // A saved RP post can describe a real social-media publication without
+    // any hidden tel:tweet/insta tag. Read it into the SAME feed store; a
+    // tagged or already generated equivalent always wins over inferred prose.
+    const ctx=SillyTavern.getContext();
+    const roster=[...(getMeta().contacts||[]).map(c=>c.name),
+        ...(getMeta().narratorKnownActors||[]).map(c=>c.name),
+        ...roleplayCast().map(c=>c.name),
+        ctx?.name2].filter(Boolean);
+    const userNames=[ctx?.name1].filter(Boolean);
+    const seenRp=new Set(s.seenRpNarrative);
+    const seenRpBefore=seenRp.size;
+    for(let i=0;i<chat.length;i++) {
+        const msg=chat[i];
+        if(!msg || msg.is_system || isAppJournal(msg))continue;
+        const source=getPhoneActivityText(msg,i);
+        if(!source)continue;
+        const events=extractNarrativeSocial(msg,{
+            text:stripThink(source),knownActors:roster,userNames,
+            isUserPost:!!msg.is_user,defaultAuthor:msg.name,
+            narratorMode:getMeta().narratorMode===true,
+        });
+        for(const ev of events){
+            if(ev.platform==='channel')continue; // handled by the channel harvester
+            if(isUserAuthor(ev.author)&&!msg.is_user)continue;
+            const fp=rpEventFingerprint(msg,i,ev);
+            if(seenRp.has(fp))continue;
+            seenRp.add(fp); s.seenRpNarrative.push(fp);
+            const ak=isUserAuthor(ev.author)?'user':resolveAuthorKey(ev.author);
+            const now=Date.now(), rpAt=storyTimestampFromReal(now);
+            if(ev.platform==='twitter'){
+                if(alreadyInFeed(s.tweets,{author:ev.author,ak,text:ev.text}))continue;
+                s.tweets.unshift({
+                    id:genId(),author:ev.author,ak,
+                    handle:ak==='user'?getUserHandle():handleFor(ak,ev.author),
+                    text:ev.text.slice(0,280),time:now,rpAt,
+                    likes:0,liked:false,rts:0,replies:[],rpSource:fp,
+                });
+                newTweets++;
+            }else if(ev.platform==='instagram'){
+                if(alreadyInFeed(s.igPosts,{author:ev.author,ak,caption:ev.text,imgDesc:ev.photo}))continue;
+                s.igPosts.unshift({
+                    id:genId(),author:ev.author,ak,caption:ev.text.slice(0,400),
+                    image:null,imgDesc:ev.photo.slice(0,200),time:now,rpAt,
+                    likes:0,liked:false,comments:[],rpSource:fp,
+                });
+                newPosts++;
+            }
+        }
+    }
+    if(s.seenRpNarrative.length>1500)s.seenRpNarrative=s.seenRpNarrative.slice(-1500);
     if (migratedLegacyKeys) {
         s.seenTags = s.seenTags.filter(k => !/^(?:tw|ig)-?\d+$/.test(k));
     }
     if (s.seenTags.length > 300) s.seenTags = s.seenTags.slice(-300);
-    if (newTweets || newPosts || migratedLegacyKeys) {
+    if (newTweets || newPosts || migratedLegacyKeys || seenRp.size !== seenRpBefore) {
         trimFeeds(s);
         saveMeta();
     }
@@ -1808,7 +1887,8 @@ export async function refreshFeed(kind = 'tw') {
     const original = s[field];
     // A timeout, API error or malformed JSON must not erase the existing feed.
     // Work against a temporary array; commit it only after fresh posts arrive.
-    s[field] = original.filter(item => item.ak === 'user');
+    // RP-established posts are facts of this chat, not disposable generated filler.
+    s[field] = original.filter(item => item.ak === 'user' || item.rpSource);
     try {
         const added = kind === 'ig' ? await generateIgFeed() : await generateTweetFeed();
         if (added > 0) return added;
@@ -1853,6 +1933,7 @@ For quote-retweets: {"author":"...","handle":"...","text":"their commentary","ty
         if (!it || !it.author || !it.text) continue;
         if (isUserAuthor(it.author) || isUserAuthor(it.handle)) continue;
         if (isBanned(it.author, it.handle)) continue;
+        if (alreadyInFeed(s.tweets,{author:it.author,ak:resolveAuthorKey(it.author),text:it.text})) continue;
         const tw = {
             id: genId(), author: String(it.author), handle: it.handle || makeHandle(it.author),
             ak: it.type === 'contact' ? resolveAuthorKey(it.author) : (narratorMode() && resolveAuthorKey(it.author).startsWith('cast:') ? resolveAuthorKey(it.author) : 'random'),
@@ -1994,6 +2075,7 @@ Format: [{"author":"Имя","photo":"описание кадра","caption":"...
         if (!it || !it.author || (!it.photo && !it.caption)) continue;
         if (isUserAuthor(it.author) || isUserAuthor(it.handle)) continue;
         if (isBanned(it.author, it.handle)) continue;
+        if (alreadyInFeed(s.igPosts,{author:it.author,ak:resolveAuthorKey(it.author),caption:it.caption,imgDesc:it.photo})) continue;
         s.igPosts.unshift({
             id: genId(), author: String(it.author),
             ak: it.type === 'contact' ? resolveAuthorKey(it.author) : (narratorMode() && resolveAuthorKey(it.author).startsWith('cast:') ? resolveAuthorKey(it.author) : 'random'),
