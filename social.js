@@ -4064,3 +4064,44 @@ export async function generatePhoneQuizPartner(contact,quiz){
     if(!Array.isArray(result?.answers))throw new Error('Не удалось получить ответы персонажа. Попробуй ещё раз.');
     return result.answers;
 }
+
+
+// Isolated NPC initiative decision. Uses phone's configured AI connection;
+// no main-chat injections, no user-authored actions, no extra phone store.
+export async function generateNpcInitiativeDecision({kind,contacts,story,storyTime}) {
+    const task=kind==='call'?'incoming phone call':'incoming private SMS';
+    const prompt=`You are the initiative director for an ongoing ROLEPLAY phone. Evaluate whether ONE existing CONTACT would naturally initiate ${task} at the current in-story moment.
+
+Story continuity and AU are authoritative. Use indirect as well as explicit story cues as possible motivation: a recent interaction, unfinished practical matter, a change in someone's mood that the sender could notice, an upcoming in-story appointment, a relevant work/personal concern, or an ordinary desire to check in. Do NOT require the source story to literally say "they decided to text/call". But do not reveal secret scenes, read other private messages, invent public events, accelerate the story, invent relationships or assume a character knows something they could not plausibly learn. Distinguish what is merely implied by the scene from what the chosen sender personally knows. This should feel like ordinary, character-appropriate initiative, not a random plot device.
+
+Use ONLY one CONTACT from the enumerated list below. Preserve their AU personality, relationship and voice. NEVER send as the player persona and do not give the persona actions, opinions, or replies. A character may choose not to initiate anything. Do not repeat the same idea or message from recent SMS. Do not turn normal RP into an announcement to all contacts. An actual current story event should take priority over a fabricated reason.
+
+Current RP date/time (if explicitly established): ${JSON.stringify(storyTime||'not specified')}
+Established contact names (no access to their private messages): ${JSON.stringify(contacts)}
+Last saved non-phone RP scenes (chronological):
+${story}
+
+${kind==='call'?'A call should be relatively rare and personally justified; the player must decide whether to answer. Supply a short reason for the incoming call, not a transcript or assumed outcome.':'Write ONE short believable inbound message (not a reply to a message that was never sent). Voice and length must suit that particular character. It can be mundane or emotional if grounded. No narration.'}
+
+Return exactly one JSON object with keys "kind", "contact_key", "text", "reason". Set "kind" to "${kind}" or "none" (nothing else). Set "contact_key" to an EXACT key from the contacts list. For an SMS, fill "text" with the message and "reason" with an empty string; for a call, fill "reason" and leave "text" empty. For kind "none", use empty strings for the other fields. All visible text in natural Russian. Do not invent what the user sends. No markdown.`;
+    const raw=await socialGen(prompt,{app:kind==='call'?'phone':'list',maxTokens:900});
+    return parseJsonObject(raw);
+}
+
+
+// Once a sender is selected, give the model ONLY that sender's own private SMS
+// history. The first, cast-wide decision never sees other contacts' DMs.
+export async function generateNpcInitiativeMessage({contact,reason,story,storyTime,ownMessages=[]}) {
+    const prompt=`Compose ONE plausible SMS initiated by this specific established roleplay contact. They have decided to write for this grounded reason: ${JSON.stringify(reason||'a small everyday reason')}.
+
+Contact identity: ${JSON.stringify(contact)}
+Their own actual phone exchange with the player (chronological; no other private threads): ${JSON.stringify(ownMessages)}
+Current RP time: ${JSON.stringify(storyTime||'not specified')}
+Recent RP scenes (chronological):
+${story}
+
+Respect the CURRENT AU, personality, existing relationship and character knowledge. A subtle or indirect situation in the roleplay can motivate an SMS IF this contact could realistically notice or know about it. Do not reveal another person's private thoughts or calls, assume secrets are public, or invent canon events. The contact speaks in their own voice, in natural Russian. Avoid generic check-ins if a more concrete, grounded reason exists. Do not repeat existing messages, invent a response from the player or add narration.
+Return ONLY JSON: {"text":"one concise SMS"}.`;
+    const obj=parseJsonObject(await socialGen(prompt,{app:'list',maxTokens:650}));
+    return String(obj?.text||'').trim().slice(0,1200);
+}

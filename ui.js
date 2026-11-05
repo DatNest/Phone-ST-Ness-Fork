@@ -498,7 +498,7 @@ function createPhone() {
                 <span id="gp-clock">--:--</span>
                 <span class="gp-status-right">
                     <span id="gp-rpdate" class="gp-rpdate"></span>
-                    <button type="button" class="gp-quiet-indicator" id="gp-quiet-indicator" title="Без звука" aria-label="Без звука" ${getSettings().quietMode ? '' : 'hidden'}>${ic('fa-bell-slash')}</button>
+                    <button type="button" class="gp-quiet-indicator" id="gp-quiet-indicator" title="Входящие приостановлены" aria-label="Входящие приостановлены" ${getSettings().quietMode ? '' : 'hidden'}>${ic('fa-bell-slash')}</button>
                     ${ic('fa-signal')}${ic('fa-wifi')}${ic('fa-battery-three-quarters')}
                     <button class="gp-close" id="gp-close" title="Закрыть">${ic('fa-xmark')}</button>
                 </span>

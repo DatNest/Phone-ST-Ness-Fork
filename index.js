@@ -19,6 +19,7 @@ import { trDom } from './i18n.js';
 import { buildReport, clearLog } from './debug-log.js';
 import { listPhoneImageBlocks } from './external-image-blocks.js';
 import { roleplayCast } from './narrator-context.js';
+import { handleNpcInitiativeTurn, initializeNpcInitiative } from './npc-initiative.js';
 import { PHONE_SOCIAL_PROMPT_DEFAULTS, normalizedSocialPrompts } from './social-prompt-overrides.js';
 
 // ── CSS ──
@@ -56,7 +57,7 @@ function setupSettingsPanel() {
             <label><input type="checkbox" id="gp-set-enabled" ${s.isEnabled ? 'checked' : ''}><span>Включено</span></label>
             <label><input type="checkbox" id="gp-set-fab" ${s.showFab ? 'checked' : ''}><span>Плавающая кнопка</span></label>
             <label><input type="checkbox" id="gp-set-inject" ${s.injectPrompt ? 'checked' : ''}><span>Инструкции для модели</span></label>
-            <label><input type="checkbox" id="gp-set-quiet" ${s.quietMode ? 'checked' : ''}><span>Без звука<small class="gp-quiet-hint">Пауза входящих · банк и календарь работают</small></span></label>
+            <label><input type="checkbox" id="gp-set-quiet" ${s.quietMode ? 'checked' : ''}><span>Приостановить входящие<small class="gp-quiet-hint">Отключает инициативные SMS и звонки. Звука звонков в телефоне нет.</small></span></label>
         </div>
 
         <details class="gp-settings-group">
@@ -67,6 +68,15 @@ function setupSettingsPanel() {
                 <label class="gp-settings-field gp-settings-wide"><span>Профиль генерации телефона</span><span class="gp-settings-control-row"><select id="gp-set-profile" class="text_pole"></select><button class="menu_button gp-settings-icon-button" id="gp-profile-test" type="button" title="Проверить профиль (маленький запрос)" aria-label="Проверить профиль (маленький запрос)"><i class="fa-solid fa-plug-circle-check"></i></button></span><small>SMS, Direct, звонки и соцсети. Без выбранного профиля — текущий API.</small></label>
                 <label class="gp-settings-field"><span>Контекст соцсетей</span><select id="gp-set-ctxmode" class="text_pole"><option value="rich" ${s.socialContextMode !== 'lite' ? 'selected' : ''}>История + лорбук + карточка бота</option><option value="lite" ${s.socialContextMode === 'lite' ? 'selected' : ''}>Только срез истории</option></select><small>SMS, Direct и звонки всегда получают карточку, лорбук и историю ролевой. Чужие переписки исключены.</small></label>
                 <label class="gp-settings-field gp-settings-wide"><span>Ролевая с нарратором</span><span class="gp-settings-checks"><label><input type="checkbox" id="gp-set-narrator" ${getMeta().narratorMode ? 'checked' : ''}><span>Мультиперсонажный режим (для этого чата)</span></label></span><small>Карточка описывает целый мир. Телефон выбирает действующих лиц по истории, карточке и лорбуку, а Narrator не становится аккаунтом. Записи об аккаунтах не создаются автоматически.</small></label>
+                <div class="gp-settings-wide gp-settings-field" style="gap:6px">
+                    <span>Инициатива персонажей</span>
+                    <label class="checkbox_label"><input id="gp-set-npcinitiative" type="checkbox" ${s.npcInitiativeEnabled !== false ? 'checked' : ''}> <span>NPC сами пишут и звонят после событий ролевой</span></label>
+                    <div class="gp-settings-control-row" style="flex-wrap:wrap;gap:10px">
+                        <label>SMS: каждые <input id="gp-set-npcsms" class="text_pole" type="number" min="1" max="100" value="${Math.min(100,Math.max(1,Number(s.npcSmsEvery)||3))}" style="width:65px"> RP-ответа</label>
+                        <label>Звонки: каждые <input id="gp-set-npccall" class="text_pole" type="number" min="1" max="100" value="${Math.min(100,Math.max(1,Number(s.npcCallEvery)||12))}" style="width:65px"> RP-ответов</label>
+                    </div>
+                    <small>ИИ ищет естественный повод в прямых и косвенных событиях RP, но может решить никому не писать. Только существующие контакты с установленной связью; без звука и без инструкций в основной чат. Переключатель «Приостановить входящие» отключает инициативу.</small>
+                </div>
                 <div class="gp-settings-wide gp-story-clock-settings">
                     <label class="gp-settings-field gp-settings-wide"><span>Дата и время ролевой</span><small>Только из явно установленных фактов в RP-постах. Если нет даты или часов, соответствующее поле остаётся пустым. Календарь, устройство и сохранённый кэш не используются.</small></label>
                     <div class="gp-settings-control-row"><button type="button" class="menu_button" id="gp-set-story-clock-refresh"><i class="fa-solid fa-rotate" aria-hidden="true"></i> Обновить время и дату</button></div>
@@ -287,6 +297,18 @@ function setupSettingsPanel() {
         getSettings().injectDepth = value;
         saveSettingsDebounced();
         updatePhoneInjection();
+    });
+    $('#gp-set-npcinitiative').on('change', function () {
+        getSettings().npcInitiativeEnabled = this.checked;
+        initializeNpcInitiative();
+        saveSettingsDebounced();
+    });
+    $('#gp-set-npcsms, #gp-set-npccall').on('change', function () {
+        const key = this.id === 'gp-set-npcsms' ? 'npcSmsEvery' : 'npcCallEvery';
+        const value = Math.min(100,Math.max(1,Math.trunc(Number(this.value)||1)));
+        this.value = value;
+        getSettings()[key] = value;
+        saveSettingsDebounced();
     });
     $('#gp-set-scam').on('change', function () {
         getSettings().scamEnabled = this.checked;
@@ -653,6 +675,7 @@ jQuery(async () => {
             setTimeout(applyChatHiding, 350); // второй проход — переживает ре-рендер ST
             if (isPhoneOpen()) render();
         };
+        initializeNpcInitiative();
         eventSource.on(event_types.MESSAGE_RECEIVED, onNewMessage);
         // ExtBlocks emits before writing its generated content to storage.
         // Defer one turn so background blocks are visible to the harvesters.
@@ -662,6 +685,11 @@ jQuery(async () => {
         eventSource.on('/fatpresets/import/extblocks', () => refreshPhoneImageBlocks());
         if (event_types.GENERATION_ENDED) {
             eventSource.on(event_types.GENERATION_ENDED, onNewMessage);
+            // After the RP response completes: no concurrent AI request with the narrator.
+            eventSource.on(event_types.GENERATION_ENDED, () => {
+                void handleNpcInitiativeTurn({notifyIncomingCall,checkNewIncoming,updateFabBadge,render,isPhoneOpen})
+                    .catch(e=>console.warn('[GlassPhone] NPC initiative:',e));
+            });
         }
         eventSource.on(event_types.MESSAGE_SENT, () => {
             if (!getSettings().isEnabled) return;
@@ -706,6 +734,7 @@ jQuery(async () => {
                 setTimeout(() => {
                     invalidateChatCache();
                     resetIncomingCounters();
+                    initializeNpcInitiative();
                     try { harvestSocialTags(); } catch (e) { /* ignore */ }
                     try { harvestBankTags(); } catch (e) { /* ignore */ }
                     try { harvestPlanTags(); } catch (e) { console.warn('[GlassPhone] Calendar tags:', e); }

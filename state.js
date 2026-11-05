@@ -14,7 +14,7 @@ import { isPhoneOnlyClockMessage, extractPresentRpClock, currentNarrativeDateLin
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '2.59.0-ness.16';
+export const GP_VERSION = '2.60.0-ness.17';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -51,6 +51,10 @@ const defaultSettings = () => ({
     socialPromptOverrides: {}, // editable/exportable phone social prompt pack
     // Спам/мошенники: редкие скам-смс с незнакомых номеров (кулдаун ~35 мин)
     scamEnabled: true,
+    npcInitiativeEnabled: true,
+    npcSmsEvery: 3, // new, non-phone RP replies between opportunities
+    npcCallEvery: 12, // incoming calls are rarer than texts
+
     // Картинко-расширение: '' = АВТООПРЕДЕЛЕНИЕ (ищем среди установленных
     // third-party расширений подходящее — src/pipeline.js с
     // generateImageWithRetry). Непустое = ручной оверрайд имени папки.
@@ -1481,6 +1485,24 @@ function scanChatUncached() {
         } else if (c.numberKnown) {
             existing.numberKnown = true;
         }
+    }
+
+
+    // NPC initiative is phone-native metadata, not an injection into the RP chat.
+    // The canonical SMS/contacts reader merges it into the SAME conversations.
+    // Do not create new contacts here: every sender was already a confirmed
+    // contact with an established number exchange when the event was created.
+    const initiativeRecords = getMeta().npcInitiative?.messages || [];
+    for (const item of initiativeRecords) {
+        if (!item || typeof item !== 'object' || !item.contactKey || !item.text) continue;
+        const key = resolveContactKey(item.contactKey);
+        if (!key || !contacts.has(key)) continue;
+        const index = Number.isInteger(item.idx) ? item.idx : 0;
+        pushMsg(key, {
+            dir:'in', text:String(item.text).slice(0,1200), idx:index,
+            tagStart: Number(item.tagStart) || 100000,
+            time:null, source:'npc-initiative', initiativeId:item.id,
+        });
     }
 
 

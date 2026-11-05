@@ -83,3 +83,26 @@ are simply ignored. No personal chat/SMS/social/avatar/theme data is reset.
 The previous No Auto User safeguard, narrator mode, avatar editing and social prompt
 editor remain part of this complete extension build. Syntax and isolated clock
 regression checks are performed; this is not a full browser integration test.
+
+## NPC Initiative (v2.60.0)
+
+An autonomous, **phone-only** initiative generator can create occasional incoming
+SMS and incoming phone calls after newly completed RP replies, including scenes
+whose consequences suggest a reason to contact the player indirectly. It uses
+confirmed contacts with an established phone-number exchange. It does not read
+replies in advance, write on the player's behalf, invent phone numbers, reveal
+secret events to uninformed characters or inject a prompt into the RP narrator.
+
+Open Phone → Settings → Model and context → NPC initiative to enable/disable it
+and set independent minimum RP-turn intervals for SMS and calls (defaults: 3
+and 12). The model can respond with `none` if nobody has an appropriate reason.
+The first install establishes a baseline; old RP turns do not cause a backlog.
+
+Incoming SMS are stored in the **existing** per-chat phone metadata and displayed
+through the normal SMS reader. Caller validation and ringing UI reuse the normal
+incoming-call path. SMS authorship is chosen without showing other contacts'
+private messages to the model. Only the selected character's own conversation
+is used to refine the final SMS. No ringtone is introduced.
+
+The setting previously labelled "Без звука" is actually a pause of incoming
+activity; it has been renamed "Приостановить входящие" to avoid confusion.
