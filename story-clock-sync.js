@@ -4,7 +4,11 @@ function hashClockText(text) {
 
 // Read the HUD's own structured scene record BEFORE shortening the RP text.
 // This is an integration with an explicit data schema, not a prose clock regex.
-export const CLOCK_CACHE_VERSION = 2;
+export const CLOCK_CACHE_VERSION = 3;
+export function clockPostCount(value) {
+    const n = Number(value);
+    return Number.isFinite(n) && n > 0 ? Math.max(1,Math.min(50,Math.trunc(n))) : 5;
+}
 export function extractHudScene(source) {
     let scene = null;
     for (const block of String(source || '').matchAll(/\[HUD\]\s*([\s\S]*?)\s*\[\/HUD\]/gi)) {
@@ -62,10 +66,11 @@ export function clockPosts(chat,clean,excluded) {
  return rows;
 }
 
-export function clockInput(rows,cache,force=false){
+export function clockInput(rows,cache,count=5){
+ count=clockPostCount(count);
  const keys=rows.map(r=>r.key);
  const previous=cache?.version===CLOCK_CACHE_VERSION&&Array.isArray(cache?.keys)&&cache.keys.length<=keys.length&&cache.keys.every((k,i)=>k===keys[i])?cache.value:null;
- const recent=rows.slice(-(force?8:5));
+ const recent=rows.slice(-count);
  const latestHud=rows.slice().reverse().find(r=>r.hud)?.hud || null;
  const date=previous?.day&&previous?.month?(previous.year?String(previous.year).padStart(4,"0"):"-")+"-"+String(previous.month).padStart(2,"0")+"-"+String(previous.day).padStart(2,"0"):null;
  const time=previous?.hours!==undefined?String(previous.hours).padStart(2,"0")+":"+String(previous.minutes).padStart(2,"0"):null;
@@ -106,23 +111,23 @@ export function createStoryClockSync({snapshot,request,persist,isOpen,onStatus,m
  function status(){return {busy:!!active,error};}
  async function sync({force=false}={}){
   if(!isOpen())return "closed";
-  const start=snapshot(),input=clockInput(start.rows,start.cache,force),same=(a,b)=>Array.isArray(a)&&a.length===b.length&&a.every((k,i)=>k===b[i]);
+  const start=snapshot(),count=clockPostCount(start.count),input=clockInput(start.rows,start.cache,count),same=(a,b)=>Array.isArray(a)&&a.length===b.length&&a.every((k,i)=>k===b[i]);
   if(active&&active.owner===start.owner)return "busy";if(active)cancel();
-  if(!force&&start.cache?.version===CLOCK_CACHE_VERSION&&same(start.cache?.keys,input.keys))return "cached";
-  if(!input.keys.length){persist(start.owner,{version:CLOCK_CACHE_VERSION,keys:[],value:null});error="";onStatus();return "empty";}
+  if(!force&&start.cache?.version===CLOCK_CACHE_VERSION&&start.cache?.count===count&&same(start.cache?.keys,input.keys))return "cached";
+  if(!input.keys.length){persist(start.owner,{version:CLOCK_CACHE_VERSION,count,keys:[],value:null});error="";onStatus();return "empty";}
   // A complete current HUD record is already an authoritative answer. Avoid a paid request even on manual refresh.
   const direct=start.rows.at(-1)?.hud;
-  if(direct?.year&&direct.hours!==undefined){persist(start.owner,{version:CLOCK_CACHE_VERSION,keys:input.keys,value:direct});error="";onStatus();return "updated";}
+  if(direct?.year&&direct.hours!==undefined){persist(start.owner,{version:CLOCK_CACHE_VERSION,count,keys:input.keys,value:direct});error="";onStatus();return "updated";}
   const job={owner:start.owner,controller:makeAbort()};active=job;error="";onStatus();
   try{
    const raw=await request(input.prompt,job.controller.signal);
    if(active!==job||job.controller.signal.aborted||!isOpen())return "cancelled";
-   const now=snapshot();if(now.owner!==job.owner||!same(now.rows.map(r=>r.key),input.keys))return "changed";
+   const now=snapshot();if(now.owner!==job.owner||clockPostCount(now.count)!==count||!same(now.rows.map(r=>r.key),input.keys))return "changed";
    const model=decodeStoryClock(raw);
    // If the model reports absolutely no evidence, do not lose the explicit
    // HUD record that we have. Flag it as the last confirmed clock, not a new reading.
    const value=model || (input.latestHud ? {...input.latestHud,source:'rp-hud-last'} : null);
-   persist(job.owner,{version:CLOCK_CACHE_VERSION,keys:input.keys,value});return "updated";
+   persist(job.owner,{version:CLOCK_CACHE_VERSION,count,keys:input.keys,value});return "updated";
   }catch(e){if(active!==job||job.controller.signal.aborted)return "cancelled";error=String(e?.message||e);return "error";}
   finally{if(active===job){active=null;onStatus();}}
  }

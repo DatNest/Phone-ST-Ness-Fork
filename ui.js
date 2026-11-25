@@ -726,7 +726,7 @@ function syncPhoneViewOwner() {
 const storyClockSync=createStoryClockSync({
     snapshot:()=>{
         const owner=getMeta(),ctx=SillyTavern.getContext();
-        return {owner,cache:owner.storyClockAi,rows:clockPosts(ctx?.chat||[],stripClockThink,isPhoneOnlyClockMessage)};
+        return {owner,cache:owner.storyClockAi,count:getSettings().storyClockPostCount,rows:clockPosts(ctx?.chat||[],stripClockThink,isPhoneOnlyClockMessage)};
     },
     request:generateStoryClock,
     persist:(owner,cache)=>{if(getMeta()===owner){owner.storyClockAi=cache;saveMeta();}},

@@ -51,3 +51,17 @@ test('complete latest HUD needs no API, old null cache is ignored, later prose u
  rows.push({key:'later',text:'следующий пост'});
  assert.equal(await c.sync(),'updated');assert.equal(calls,1);assert.equal(cache.value.source,'rp-hud-last');
 });
+
+test('configurable context depth applies to both refresh and open; changed depth invalidates cache',async()=>{
+ const owner={},rows=Array.from({length:12},(_,i)=>({key:String(i),text:'POST_'+i+'_END'}));
+ let count=3,cache=null,calls=0;
+ const c=createStoryClockSync({snapshot:()=>({owner,rows,cache,count}),request:async prompt=>{
+  calls++;assert.match(prompt,/POST_11_END/);
+  assert.equal(prompt.includes('POST_8_END'),count>=4);
+  assert.equal(prompt.includes('POST_0_END'),count>=12);
+  return '2025-09-03 | 17:22';
+ },persist:(_,v)=>{cache=v},isOpen:()=>true,onStatus:()=>{}});
+ assert.equal(await c.sync(),'updated');assert.equal(await c.sync(),'cached');
+ assert.equal(await c.sync({force:true}),'updated');assert.equal(calls,2);
+ count=12;assert.equal(await c.sync(),'updated');assert.equal(calls,3);
+});

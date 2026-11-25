@@ -2,7 +2,8 @@ import { isPhoneAppInstalled, phoneAppForThread } from './state.js';
 import { phonePlatformApp } from './phone-apps.js';
 import { normalizePhoneSpaces, parsePhoneJson } from './phone-text.js';
 import { buildPhoneCallContext, buildPhoneConversationContext, loreText } from './call-context.js';
-import { generateRaw, user_avatar, getThumbnailUrl, saveSettingsDebounced } from '../../../../script.js';
+import { generateRaw, user_avatar, getThumbnailUrl, saveSettingsDebounced, amount_gen } from '../../../../script.js';
+import { resolveClockTokenLimit } from './clock-token-limit.js';
 import { saveBase64AsFile } from '../../../utils.js';
 import { extensionNames, extension_settings } from '../../../extensions.js';
 import { getMeta, saveMeta, keyOf, scanChat, getSettings, stripThink, textMentionsName, stripHandle, isBanned, displayName, getRpDateTime, extractTemporalContext, isUserName, isAppJournal, getPhoneMessageText, contactOriginalName, contactIdentityPrompt, resolveContactKey } from './state.js';
@@ -1392,7 +1393,7 @@ async function socialGenCore(prompt, { maxTokens = 1024, image = null, prefill =
     const profileId = (storyClock && st.storyClockProfileId) || st.socialProfileId;
     // Clock has a small visible answer but reasoning tokens may share this ceiling.
     // Do not inherit a low social-app limit or a prose/assistant prefill setting.
-    maxTokens = storyClock ? 2048 : socialTokenLimit(maxTokens);
+    maxTokens = storyClock ? resolveClockTokenLimit(SillyTavern.getContext(),profileId,amount_gen) : socialTokenLimit(maxTokens);
     const usePrefill = !storyClock && !!(st.usePrefill && prefill) && !_noPrefill.has(profileId || '(current)');
     const useFigureSpaces = !storyClock && !!st.useFigureSpaces;
     const messages = buildGenerationMessages(prompt, prefill, usePrefill, useFigureSpaces);
@@ -1525,7 +1526,8 @@ export async function generateStoryClock(prompt, signal) {
         signal?.addEventListener('abort',stop,{once:true});
     });
     try {
-        logReq('синхронизация RP-времени',where+' · '+String(prompt).length+' симв. · max 2048');
+        const limit=resolveClockTokenLimit(SillyTavern.getContext(),id,amount_gen);
+        logReq('синхронизация RP-времени',where+' · '+String(prompt).length+' симв. · max '+limit+' (пресет подключения)');
         const task=socialGen(prompt,{storyClock:true,signal});
         const raw=String(await Promise.race([task,cancelled]) || '').trim();
         if(!raw)throw new Error('Модель вернула пустой текст. Возможно, лимит ушёл на рассуждения или провайдер не вернул финальный ответ.');

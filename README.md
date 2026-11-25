@@ -50,3 +50,7 @@ Clock uses the existing phone generation transport, inherits the phone connectio
 ### Ness 2.60.0-ness.20 — HUD clock integration
 
 Extracts the HUD scene record before truncating long messages, drops unrelated HUD data from the model context, and reads complete current HUD date/time locally without a model call. Later RP posts without complete HUD still use AI, with the last explicit HUD as evidence. Invalidates previous clock cache schema. If AI returns no clock, labels the last known HUD separately.
+
+### Ness 2.60.0-ness.21 — clock context depth and inherited budget
+
+Choose 1–50 recent RP posts (default five) in clock settings; automatic and manual sync use the same count. A depth change invalidates the clock cache on next explicit sync. The response budget comes from the Connection Manager profile's completion preset, or live SillyTavern generation settings when no preset budget is available. HUD shortcut and no-background behavior remain unchanged.

@@ -1,4 +1,5 @@
 import { registerPhoneSettings } from './phone-settings.js';
+import { clockPostCount } from './story-clock-sync.js';
 
 import { eventSource, event_types, saveSettingsDebounced, saveChatConditional } from '../../../../script.js';
 import { getSettings, getMeta, saveMeta, GP_VERSION, invalidateChatCache, invalidateStoryClockCache, getRpDateTime, factoryReset, wipePhoneTraces, captureRoleplayOutgoing, setPhoneQuietMode } from './state.js';
@@ -80,6 +81,7 @@ function setupSettingsPanel() {
                 <div class="gp-settings-wide gp-story-clock-settings">
                     <label class="gp-settings-field gp-settings-wide"><span>Дата и время ролевой</span><small>Телефон читает дату и время HUD напрямую, если они есть в последнем RP-посте. Иначе ИИ анализирует посты и метки при открытии после изменения чата или по кнопке. Без фоновых запросов. Кэш отдельный для каждого чата.</small></label>
                     <label class="gp-settings-field gp-settings-wide"><span>Профиль синхронизации времени</span><select id="gp-set-clock-profile" class="text_pole"></select><small>По умолчанию — профиль генерации телефона.</small></label>
+                    <label class="gp-settings-field gp-settings-wide"><span>Сколько последних RP-постов читать</span><input id="gp-set-clock-post-count" type="number" class="text_pole gp-settings-number" min="1" max="50" step="1" value="${clockPostCount(s.storyClockPostCount)}"><small>Одинаково при открытии и ручном обновлении. Лимит ответа — из пресета подключения, а не из настроек телефона.</small></label>
                     <div class="gp-settings-control-row"><button type="button" class="menu_button" id="gp-set-story-clock-refresh"><i class="fa-solid fa-rotate" aria-hidden="true"></i> Обновить время и дату</button></div>
                     <small id="gp-story-clock-status" class="gp-settings-wide" aria-live="polite"></small>
                 </div>
@@ -518,6 +520,12 @@ function setupSettingsPanel() {
         sel.value=current;
     };
     fillClockProfiles();
+    $('#gp-set-clock-post-count').on('change',function(){
+        const count=clockPostCount(this.value);
+        this.value=String(count);
+        getSettings().storyClockPostCount=count;
+        saveSettingsDebounced();
+    });
     $('#gp-set-clock-profile').on('mousedown focus',fillClockProfiles).on('change',function(){
         getSettings().storyClockProfileId=this.value;saveSettingsDebounced();
     });

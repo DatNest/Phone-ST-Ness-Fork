@@ -14,7 +14,7 @@ import { isPhoneOnlyClockMessage, parseHtStoryClock } from './story-clock-guard.
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '2.60.0-ness.20';
+export const GP_VERSION = '2.60.0-ness.21';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -39,6 +39,7 @@ const defaultSettings = () => ({
     // изолированно от пресета). Отдельный профиль дополнительно включает вижн.
     socialProfileId: '',
     storyClockProfileId: '',
+    storyClockPostCount: 5,
     // Префилл ответа: отдельное финальное assistant-сообщение с началом JSON.
     // Для несовместимых text-completion путей используется безопасная эмуляция.
     usePrefill: false,
