@@ -38,3 +38,7 @@ Phone contacts and RP SMS still use the canonical identity/thread store;
 confirmed prose SMS and `tel:sms` duplicates are reconciled. The player is not
 made to post by narrator-authored text. No main-chat prompt injection is
 required. This parser does not automatically draw images from descriptions.
+
+### Ness 2.60.0-ness.18 — on-demand AI story clock
+
+The phone reads the latest five RP posts and available external HTML metadata only on opening after a content change. Manual refresh reads eight posts. Cached results (including unknown date/time) live in chat metadata. Edits/swipes invalidate the signature; switching chats or closing discards pending responses. No background clock requests. Choose an optional clock connection profile or inherit the phone profile. Historical per-message SMS timestamp tags remain independent. Transport cancellation depends on the selected provider.

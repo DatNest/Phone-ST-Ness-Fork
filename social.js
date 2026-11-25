@@ -1326,7 +1326,7 @@ function profileInfo(profileId) {
     };
 }
 
-async function profileRequest(profileId, messages, maxTokens) {
+async function profileRequest(profileId, messages, maxTokens, signal = undefined) {
     const ctx = SillyTavern.getContext();
     const cm = ctx?.ConnectionManagerRequestService;
     if (!cm?.sendRequest) {
@@ -1335,7 +1335,7 @@ async function profileRequest(profileId, messages, maxTokens) {
     const built = profileInfo(profileId);
     if (!built) throw new Error(`Профиль подключения не найден: ${profileId}`);
     const res = await cm.sendRequest(profileId, messages, maxTokens, {
-        stream: false, extractData: true, includePreset: false, includeInstruct: false,
+        stream: false, extractData: true, includePreset: false, includeInstruct: false, ...(signal ? { signal } : {}),
     });
     return { content: await extractGeneratedText(res), info: `${built.info} · Connection Manager` };
 }
@@ -1507,6 +1507,32 @@ async function socialGenCore(prompt, { maxTokens = 1024, image = null, prefill =
         }
         logFail('запрос (текущий API)', root);
         throw e;
+    }
+}
+
+// Isolated one-shot clock request: no social prompts, history, prefill or retries.
+export async function generateStoryClock(prompt, signal) {
+    const settings=getSettings();
+    const profileId=settings.storyClockProfileId || settings.socialProfileId || '';
+    const controller=new AbortController(), abort=()=>controller.abort();
+    if(signal?.aborted)throw new DOMException('Отменено','AbortError');
+    signal?.addEventListener('abort',abort,{once:true});
+    const timer=setTimeout(abort,60000);
+    let stop;
+    const cancelled=new Promise((_,reject)=>{
+        stop=()=>reject(new DOMException('Синхронизация отменена или истекло время ожидания','AbortError'));
+        controller.signal.addEventListener('abort',stop,{once:true});
+    });
+    try {
+        const task=profileId
+            ? profileRequest(profileId,[{role:'user',content:prompt}],192,controller.signal).then(r=>r.content)
+            : generateRaw({prompt,responseLength:192,signal:controller.signal});
+        const raw=await Promise.race([task,cancelled]);
+        return cleanGenOutput(await extractGeneratedText(raw));
+    } finally {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort',abort);
+        controller.signal.removeEventListener('abort',stop);
     }
 }
 

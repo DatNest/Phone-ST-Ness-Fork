@@ -1,4 +1,7 @@
-import { cancelPhoneImageGenerations } from './social.js';
+import { cancelPhoneImageGenerations, generateStoryClock } from './social.js';
+import { clockPosts, createStoryClockSync } from './story-clock-sync.js';
+import { isPhoneOnlyClockMessage } from './story-clock-guard.js';
+import { stripThink as stripClockThink } from './state.js';
 import { renderAppStore } from './app-store.js';
 import { isPhoneAppInstalled, phoneAppForThread } from './state.js';
 import { phoneAppId } from './phone-apps.js';
@@ -720,11 +723,36 @@ function syncPhoneViewOwner() {
     _lastFocusKey = null;
 }
 
+const storyClockSync=createStoryClockSync({
+    snapshot:()=>{
+        const owner=getMeta(),ctx=SillyTavern.getContext();
+        return {owner,cache:owner.storyClockAi,rows:clockPosts(ctx?.chat||[],stripClockThink,isPhoneOnlyClockMessage)};
+    },
+    request:generateStoryClock,
+    persist:(owner,cache)=>{if(getMeta()===owner){owner.storyClockAi=cache;saveMeta();}},
+    isOpen:isPhoneOpen,
+    onStatus:()=>{if(isPhoneOpen())tickClock();},
+});
+export function cancelStoryClockSync(){storyClockSync.cancel();}
+export function refreshStoryClockStatus(){
+    const state=storyClockSync.status(),dt=getRpDateTime(),el=document.getElementById('gp-story-clock-status');
+    if(el){
+        const date=dt?.day?(dt.year?dt.label+'.'+dt.year:dt.label+' (год неизвестен)'):'не найдена';
+        const time=dt?.hours!==undefined?String(dt.hours).padStart(2,'0')+':'+String(dt.minutes).padStart(2,'0'):'не найдено';
+        el.textContent=state.busy?'ИИ читает RP-посты…':state.error?'Ошибка синхронизации: '+state.error:'Дата: '+date+' · Время: '+time;
+    }
+    const btn=document.getElementById('gp-set-story-clock-refresh');if(btn)btn.disabled=state.busy;
+}
+export async function syncPhoneStoryClock(options={}){
+    const result=await storyClockSync.sync(options);
+    if(isPhoneOpen()){
+        tickClock();
+        if(result==='updated'){try{notifyDeliveries();notifyBankReminders();}catch(e){console.warn('[GlassPhone] clock notifications',e);}}
+    }
+    return result;
+}
 export function openPhone(threadKey = null) {
     syncPhoneViewOwner();
-    // On every open, read the RP posts again; never use calendar/device/old stored time.
-    invalidateStoryClockCache();
-    getRpDateTime();
     invalidateChatCache();
     scanChat(); // Re-read RP prose messages on EVERY open, including lock screen.
     // Read explicit and prose RP social evidence into existing app feeds.
@@ -755,6 +783,8 @@ export function openPhone(threadKey = null) {
     tickClock();
     if (clockTimer) clearInterval(clockTimer);
     clockTimer = setInterval(tickClock, 20000);
+    // Only an explicit phone open can start automatic clock sync.
+    void syncPhoneStoryClock();
 
     // Страховка от «белой полосы»: если корпус телефона схлопнулся
     // (старый Safari без inset/dvh, контейнер-квирки ST 1.18) —
@@ -779,6 +809,7 @@ export function openPhone(threadKey = null) {
 }
 
 export function closePhone() {
+    cancelStoryClockSync();
     if (currentScreen !== 'lock') lastUnlockedScreen = currentScreen;
     parkPhoneSettings();
     document.getElementById('gp-screen')?.querySelectorAll('.gp-phone-sheet-shade').forEach(closePhoneSheet);
@@ -802,19 +833,23 @@ function togglePhone() {
 
 function tickClock() {
     const rpDt = getRpDateTime();
+    const syncing=storyClockSync.status().busy;
     const el = document.getElementById('gp-clock');
     if (el) {
         const known = rpDt?.hours !== undefined;
-        el.textContent = known ? `${String(rpDt.hours).padStart(2, '0')}:${String(rpDt.minutes).padStart(2, '0')}` : '--:--';
+        el.textContent = syncing ? '…' : known ? `${String(rpDt.hours).padStart(2, '0')}:${String(rpDt.minutes).padStart(2, '0')}` : '--:--';
     }
     const homeClock = document.querySelector('#gp-screen .gp-home-clock');
-    const storyTime = rpDt?.hours !== undefined ? `${String(rpDt.hours).padStart(2,'0')}:${String(rpDt.minutes).padStart(2,'0')}` : '--:--';
+    const storyTime = syncing ? '…' : rpDt?.hours !== undefined ? `${String(rpDt.hours).padStart(2,'0')}:${String(rpDt.minutes).padStart(2,'0')}` : '--:--';
     document.querySelectorAll('#gp-screen .gp-lock-clock').forEach(clock=>{clock.textContent=storyTime;});
     if (homeClock) homeClock.textContent=storyTime;
     const rp = document.getElementById('gp-rpdate');
     if (rp) {
         rp.textContent = rpDt?.label || '';
     }
+    const dateText=rpDt?.day?(Number.isInteger(rpDt.year)?DAYS_I18N[lang()][new Date(rpDt.year,rpDt.month-1,rpDt.day).getDay()]+', ':'')+rpDt.day+' '+MONTHS_I18N[lang()][rpDt.month-1]:tr('Дата сюжета не установлена');
+    document.querySelectorAll('#gp-screen .gp-lock-date, #gp-screen .gp-home-date').forEach(el=>{el.textContent=dateText;});
+    refreshStoryClockStatus();
 }
 
 // ═══ Рендер экранов ═══

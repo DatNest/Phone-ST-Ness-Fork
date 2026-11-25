@@ -9,12 +9,12 @@ import { captureRoleplaySms, extractRoleplaySms, hasMixedRoleplaySms, extractNar
 import { cleanContactName, contactNameKey, redirectedContactKey, resolveIdentity, repairContactMetadata } from './contact-identity.js';
 import { discoverRpContacts } from './contact-discovery.js';
 import { sameSocialPost, normalizeSocialText } from './roleplay-social.js';
-import { isPhoneOnlyClockMessage, extractPresentRpClock, currentNarrativeDateLine, parseHtStoryClock } from './story-clock-guard.js';
+import { isPhoneOnlyClockMessage, parseHtStoryClock } from './story-clock-guard.js';
 
 export const EXT_NAME = 'glassphone';
 // Версия для сверки инстансов (ПК ↔ айфон): видна в настройках и в консоли.
 // БАМПАТЬ при каждом коммите вместе с manifest.json!
-export const GP_VERSION = '2.60.0-ness.17';
+export const GP_VERSION = '2.60.0-ness.18';
 const META_KEY = 'glassphone';
 
 // ── Глобальные настройки ──
@@ -38,6 +38,7 @@ const defaultSettings = () => ({
     // Профиль подключения для генерации соцсетей ('' = текущий API через generateRaw,
     // изолированно от пресета). Отдельный профиль дополнительно включает вижн.
     socialProfileId: '',
+    storyClockProfileId: '',
     // Префилл ответа: отдельное финальное assistant-сообщение с началом JSON.
     // Для несовместимых text-completion путей используется безопасная эмуляция.
     usePrefill: false,
@@ -1142,82 +1143,12 @@ export function extractTemporalContext(text, base = null) {
     return { raw: mentions.join(' | ').slice(0, 300), normalized };
 }
 
-// Unified RP clock. Reads only roleplay posts; no calendar injection, device clock,
-// manual override, last-known snapshot or inferred passage of time.
-let _rpDateCache = null;
-let _rpDateSig = null;
-export function invalidateStoryClockCache() { _rpDateCache = null; _rpDateSig = null; }
-
-function strictDate(value) {
-    if (!value || !Number.isInteger(Number(value.year)) ||
-        !Number.isInteger(Number(value.month)) || !Number.isInteger(Number(value.day))) return null;
-    const year=Number(value.year), month=Number(value.month), day=Number(value.day);
-    if (year<1 || year>9999 || month<1 || month>12 || day<1 || day>31) return null;
-    const date=new Date(0);date.setFullYear(year,month-1,day);
-    if (date.getFullYear()!==year || date.getMonth()!==month-1 || date.getDate()!==day) return null;
-    return {year,month,day,label:`${String(day).padStart(2,'0')}.${String(month).padStart(2,'0')}`};
-}
-function strictTime(value) {
-    const hours=Number(value?.hours),minutes=Number(value?.minutes);
-    if (!Number.isInteger(hours) || !Number.isInteger(minutes) || hours<0 || hours>23 || minutes<0 || minutes>59) return null;
-    return {hours,minutes};
-}
-function evidenceForPost(message) {
-    if (!message?.mes || message.is_system || isPhoneOnlyClockMessage(message)) return {date:null,time:null};
-    const source=stripThink(message.mes);
-    // Current RP timestamp in an HT HTML comment has priority over older
-    // phone-specific tags or arbitrary "time" mentions in the same post.
-    const ht=parseHtStoryClock(source);
-    if (ht) return { date:strictDate(ht.date), time:strictTime(ht.time) };
-    const tag=parseTimeTag(source);
-    if (tag) return {date:strictDate(tag),time:strictTime(tag)};
-    let date=null,time=null;
-    const marker=source.match(RP_DATE_RE);
-    if (marker) {
-        const m=marker;
-        const year=Number(m[3]);
-        date=strictDate({day:Number(m[1]),month:Number(m[2]),year:year<100 ? (year<50?year+2000:year+1900):year});
-        if (m[4]!==undefined) time=strictTime({hours:Number(m[4]),minutes:Number(m[5])});
-    }
-    // Only a present-time declaration counts. Appointments and SMS mentions do not.
-    const explicitClock=extractPresentRpClock(source);
-    if (!time && explicitClock) {
-        const match=explicitClock.match(/^(\d{1,2}):([0-5]\d)$/);
-        if (match) time=strictTime({hours:Number(match[1]),minutes:Number(match[2])});
-    }
-    if (!date) {
-        const declaration=currentNarrativeDateLine(source);
-        if (declaration) {
-            const parsed=parseAnyDateTime(declaration);
-            date=strictDate(parsed);
-            // Time on an explicitly CURRENT date/time heading is also current.
-            if (!time && date && parsed?.hours !== undefined)
-                time=strictTime(parsed);
-        }
-    }
-    return {date,time};
-}
+// Current RP clock: synchronous per-chat AI result. No request or parsing here.
+export function invalidateStoryClockCache() { /* compatibility: cache is content-addressed */ }
 export function getRpDateTime() {
-    try {
-        const ctx=SillyTavern.getContext();
-        const chat=Array.isArray(ctx?.chat)?ctx.chat:[];
-        // The cache is only a performance optimization. It never stores a fallback
-        // and is forced to rescan when the user presses Refresh or opens the phone.
-        const tail=chat.slice(-5).map(m=>String(m?.mes||'')).join('\u001e');
-        const sig=String(ctx?.chatId||'')+'|'+chat.length+'|'+tail;
-        if (sig===_rpDateSig) return _rpDateCache;
-        let date=null,time=null;
-        for(let i=chat.length-1;i>=0 && (!date||!time);i--){
-            const post=evidenceForPost(chat[i]);
-            if(!date && post.date) date=post.date;
-            if(!time && post.time) time=post.time;
-        }
-        _rpDateSig=sig;
-        if(!date && !time){_rpDateCache=null;return null;}
-        _rpDateCache={...(date||{}),...(time||{}),...(date?{}:{timeOnly:true}),source:'rp-post'};
-        return _rpDateCache;
-    }catch(_){_rpDateSig=null;_rpDateCache=null;return null;}
+    return chat_metadata?.[META_KEY]?.storyClockAi?.value || null;
 }
+
 
 // Обратная совместимость: label «ДД.ММ»
 // Возвращает { contacts: Map(key → {name, number, source}), threads: Map(key → {name, messages[]}) }

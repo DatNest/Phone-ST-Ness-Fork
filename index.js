@@ -3,7 +3,7 @@ import { registerPhoneSettings } from './phone-settings.js';
 import { eventSource, event_types, saveSettingsDebounced, saveChatConditional } from '../../../../script.js';
 import { getSettings, getMeta, saveMeta, GP_VERSION, invalidateChatCache, invalidateStoryClockCache, getRpDateTime, factoryReset, wipePhoneTraces, captureRoleplayOutgoing, setPhoneQuietMode } from './state.js';
 import { updatePhoneInjection } from './prompts.js';
-import { initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, closePhone, applySkin, applyWallpaper, applyChatHiding, toast, notifyBankReminders, notifyDeliveries, deliverScamSms } from './ui.js';
+import { syncPhoneStoryClock, cancelStoryClockSync, refreshStoryClockStatus, initUI, checkNewIncoming, resetIncomingCounters, updateFabBadge, render, isPhoneOpen, closePhone, applySkin, applyWallpaper, applyChatHiding, toast, notifyBankReminders, notifyDeliveries, deliverScamSms } from './ui.js';
 import { harvestSocialTags, setUserHandle, getUserHandle, listIigProfiles, listIigStyles, listImageBuckets, currentExtModel, stripFakeJournal } from './social.js';
 import { harvestBankTags } from './bank.js';
 import { harvestPlanTags } from './plans.js';
@@ -78,7 +78,8 @@ function setupSettingsPanel() {
                     <small>ИИ ищет естественный повод в прямых и косвенных событиях RP, но может решить никому не писать. Только существующие контакты с установленной связью; без звука и без инструкций в основной чат. Переключатель «Приостановить входящие» отключает инициативу.</small>
                 </div>
                 <div class="gp-settings-wide gp-story-clock-settings">
-                    <label class="gp-settings-field gp-settings-wide"><span>Дата и время ролевой</span><small>Только из явно установленных фактов в RP-постах. Если нет даты или часов, соответствующее поле остаётся пустым. Календарь, устройство и сохранённый кэш не используются.</small></label>
+                    <label class="gp-settings-field gp-settings-wide"><span>Дата и время ролевой</span><small>ИИ читает свежие RP-посты и их HTML-метки только при открытии телефона после изменения чата или по кнопке. Без фоновых запросов. Результат сохраняется отдельно для каждого чата.</small></label>
+                    <label class="gp-settings-field gp-settings-wide"><span>Профиль синхронизации времени</span><select id="gp-set-clock-profile" class="text_pole"></select><small>По умолчанию — профиль генерации телефона.</small></label>
                     <div class="gp-settings-control-row"><button type="button" class="menu_button" id="gp-set-story-clock-refresh"><i class="fa-solid fa-rotate" aria-hidden="true"></i> Обновить время и дату</button></div>
                     <small id="gp-story-clock-status" class="gp-settings-wide" aria-live="polite"></small>
                 </div>
@@ -507,6 +508,19 @@ function setupSettingsPanel() {
             saveSettingsDebounced();
         }
     };
+    const fillClockProfiles=()=>{
+        const sel=document.getElementById('gp-set-clock-profile');if(!sel)return;
+        const current=getSettings().storyClockProfileId||'';
+        const profiles=SillyTavern.getContext()?.extensionSettings?.connectionManager?.profiles||[];
+        sel.replaceChildren(new Option('Как у телефона',''));
+        for(const p of profiles)sel.append(new Option(p.name||p.id,p.id));
+        if(current&&!profiles.some(p=>p.id===current))sel.append(new Option('Недоступный профиль: '+current,current));
+        sel.value=current;
+    };
+    fillClockProfiles();
+    $('#gp-set-clock-profile').on('mousedown focus',fillClockProfiles).on('change',function(){
+        getSettings().storyClockProfileId=this.value;saveSettingsDebounced();
+    });
     fillProfiles();
     // Профили могли добавиться позже — обновляем список при открытии выпадашки
     $('#gp-set-profile').on('mousedown', fillProfiles);
@@ -546,20 +560,10 @@ function setupSettingsPanel() {
         catch(e){toast('Ошибка импорта: '+String(e.message),'fa-circle-exclamation');}
     });
     $('#gp-social-prompts-reset').on('click',()=>{if(!confirm('Вернуть стандартные промпты соцсетей?'))return;getSettings().socialPromptOverrides={};saveSettingsDebounced();populateSocialPrompts();toast('Стандартные промпты восстановлены','fa-check');});
-    const refreshStoryClockForm = () => {
-        const status=document.getElementById('gp-story-clock-status');
-        if(!status)return;
-        const dt=getRpDateTime();
-        const date=Number.isInteger(dt?.year)?`${String(dt.day).padStart(2,'0')}.${String(dt.month).padStart(2,'0')}.${dt.year}`:'не найдена';
-        const time=dt?.hours!==undefined?`${String(dt.hours).padStart(2,'0')}:${String(dt.minutes).padStart(2,'0')}`:'не найдено';
-        status.textContent=`Дата из RP-постов: ${date} · Время из RP-постов: ${time}`;
-    };
-    $('#gp-set-story-clock-refresh').on('click',()=>{
-        invalidateStoryClockCache();
-        const dt=getRpDateTime();
-        refreshStoryClockForm();
-        if(isPhoneOpen())render();
-        toast(dt?'Сюжетное время перечитано из RP-постов':'В RP-постах нет явно установленной даты или времени','fa-clock');
+    const refreshStoryClockForm=refreshStoryClockStatus;
+    $('#gp-set-story-clock-refresh').on('click',async()=>{
+        const result=await syncPhoneStoryClock({force:true});
+        if(isPhoneOpen()&&result==='updated')toast('Сюжетное время синхронизировано','fa-clock');
     });
     refreshStoryClockForm();
     $('#gp-set-narrator').on('change', function () {
@@ -727,6 +731,7 @@ jQuery(async () => {
         // ── Смена чата: новый источник правды, счётчики с нуля ──
         if (event_types.CHAT_CHANGED) {
             eventSource.on(event_types.CHAT_CHANGED, () => {
+                cancelStoryClockSync();
                 clearPhoneNotifications();
                 clearTimeout(instagramJournalTimer);
                 invalidateChatCache();
