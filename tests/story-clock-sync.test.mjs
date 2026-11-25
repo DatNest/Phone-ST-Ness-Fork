@@ -22,3 +22,14 @@ test('late results after chat change cannot save',async()=>{
  let owner={},resolve,save=0;const c=createStoryClockSync({snapshot:()=>({owner,rows:[{key:'a',text:'scene'}],cache:null}),request:()=>new Promise(r=>resolve=r),persist:()=>save++,isOpen:()=>true,onStatus:()=>{}});
  const p=c.sync();assert.equal(await c.sync(),'busy');owner={};resolve('{"date":null,"time":"18:00"}');assert.equal(await p,'changed');assert.equal(save,0);
 });
+
+test('compact model output, optional JSON, empty and incomplete answers',()=>{
+ assert.equal(decodeStoryClock('1997-10-23 | 17:30').hours,17);
+ assert.equal(decodeStoryClock('--10-23 | 7:05').hours,7);
+ assert.equal(decodeStoryClock('? | ?'),null);
+ assert.equal(decodeStoryClock(' ```text\n1997-10-23 | ?\n``` ').day,23);
+ assert.throws(()=>decodeStoryClock(''),/пустой ответ/);
+ assert.throws(()=>decodeStoryClock('{"date":'),/неполный/);
+ assert.throws(()=>decodeStoryClock('1997-10-23 | 24:00'));
+ assert.throws(()=>decodeStoryClock('1997-02-29 | 18:00'));
+});

@@ -42,3 +42,7 @@ required. This parser does not automatically draw images from descriptions.
 ### Ness 2.60.0-ness.18 — on-demand AI story clock
 
 The phone reads the latest five RP posts and available external HTML metadata only on opening after a content change. Manual refresh reads eight posts. Cached results (including unknown date/time) live in chat metadata. Edits/swipes invalidate the signature; switching chats or closing discards pending responses. No background clock requests. Choose an optional clock connection profile or inherit the phone profile. Historical per-message SMS timestamp tags remain independent. Transport cancellation depends on the selected provider.
+
+### Ness 2.60.0-ness.19 — clock transport fix
+
+Clock uses the existing phone generation transport, inherits the phone connection or a selected clock profile, bypasses social prefill and low output caps, and uses a 2048-token ceiling (including provider reasoning) with a single compact line response. Empty and incomplete responses get explicit errors. No automatic retries or new request triggers.

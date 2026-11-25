@@ -1326,7 +1326,7 @@ function profileInfo(profileId) {
     };
 }
 
-async function profileRequest(profileId, messages, maxTokens, signal = undefined) {
+async function profileRequest(profileId, messages, maxTokens) {
     const ctx = SillyTavern.getContext();
     const cm = ctx?.ConnectionManagerRequestService;
     if (!cm?.sendRequest) {
@@ -1335,7 +1335,7 @@ async function profileRequest(profileId, messages, maxTokens, signal = undefined
     const built = profileInfo(profileId);
     if (!built) throw new Error(`Профиль подключения не найден: ${profileId}`);
     const res = await cm.sendRequest(profileId, messages, maxTokens, {
-        stream: false, extractData: true, includePreset: false, includeInstruct: false, ...(signal ? { signal } : {}),
+        stream: false, extractData: true, includePreset: false, includeInstruct: false,
     });
     return { content: await extractGeneratedText(res), info: `${built.info} · Connection Manager` };
 }
@@ -1379,27 +1379,29 @@ async function socialGen(prompt, options = {}) {
     }
 }
 
-async function socialGenCore(prompt, { maxTokens = 1024, image = null, prefill = '', app = null } = {}) {
+async function socialGenCore(prompt, { maxTokens = 1024, image = null, prefill = '', app = null, storyClock = false, signal = null } = {}) {
     const st = getSettings();
     const activityVersion = st.phoneActivityVersion;
     const checkActivity = () => {
-        if (phoneActivityAllowed(activityVersion) && (!app || isPhoneAppInstalled(app))) return;
+        if (storyClock ? !signal?.aborted : phoneActivityAllowed(activityVersion) && (!app || isPhoneAppInstalled(app))) return;
         const error = new Error('Активность телефона отменена или приложение удалено.');
         error.name = 'AbortError';
         throw error;
     };
     checkActivity();
-    const profileId = st.socialProfileId;
-    // User limit is a ceiling; small tasks keep their own smaller budgets.
-    maxTokens = socialTokenLimit(maxTokens);
-    const usePrefill = !!(st.usePrefill && prefill) && !_noPrefill.has(profileId || '(current)');
-    const useFigureSpaces = !!st.useFigureSpaces;
+    const profileId = (storyClock && st.storyClockProfileId) || st.socialProfileId;
+    // Clock has a small visible answer but reasoning tokens may share this ceiling.
+    // Do not inherit a low social-app limit or a prose/assistant prefill setting.
+    maxTokens = storyClock ? 2048 : socialTokenLimit(maxTokens);
+    const usePrefill = !storyClock && !!(st.usePrefill && prefill) && !_noPrefill.has(profileId || '(current)');
+    const useFigureSpaces = !storyClock && !!st.useFigureSpaces;
     const messages = buildGenerationMessages(prompt, prefill, usePrefill, useFigureSpaces);
     const fallbackPrompt = legacyPrompt(prompt, prefill, usePrefill, useFigureSpaces);
 
     const finish = (raw) => {
         checkActivity();
         let out = cleanGenOutput(raw);
+        if (storyClock) return out;
         if (!usePrefill) return normalizePhoneResult(out);
         out = removeCommonPreamble(out);
         out = removeRepeatedPrefill(out, prefill);
@@ -1496,7 +1498,7 @@ async function socialGenCore(prompt, { maxTokens = 1024, image = null, prefill =
         checkActivity();
         const res = await generateRaw({ prompt: fallbackPrompt, responseLength: maxTokens });
         logOk('ответ (текущий API)', `${String(res || '').length} симв.`);
-        return finish(res);
+        return finish(storyClock ? await extractGeneratedText(res) : res);
     } catch (e) {
         const root = rootErrorMessage(e);
         const rescued = await recoverGeneratedText(e, finish, usePrefill ? prefill : '');
@@ -1510,29 +1512,35 @@ async function socialGenCore(prompt, { maxTokens = 1024, image = null, prefill =
     }
 }
 
-// Isolated one-shot clock request: no social prompts, history, prefill or retries.
+// Same proven connection path as the other phone apps. No extra request,
+// no prefill, no automatic fallback to another profile, no automatic retry.
 export async function generateStoryClock(prompt, signal) {
-    const settings=getSettings();
-    const profileId=settings.storyClockProfileId || settings.socialProfileId || '';
-    const controller=new AbortController(), abort=()=>controller.abort();
+    const st=getSettings();
+    const id=st.storyClockProfileId || st.socialProfileId || '';
+    const where=id ? (profileInfo(id)?.info || id) : 'Текущий API';
     if(signal?.aborted)throw new DOMException('Отменено','AbortError');
-    signal?.addEventListener('abort',abort,{once:true});
-    const timer=setTimeout(abort,60000);
     let stop;
     const cancelled=new Promise((_,reject)=>{
-        stop=()=>reject(new DOMException('Синхронизация отменена или истекло время ожидания','AbortError'));
-        controller.signal.addEventListener('abort',stop,{once:true});
+        stop=()=>reject(new DOMException('Синхронизация отменена','AbortError'));
+        signal?.addEventListener('abort',stop,{once:true});
     });
     try {
-        const task=profileId
-            ? profileRequest(profileId,[{role:'user',content:prompt}],192,controller.signal).then(r=>r.content)
-            : generateRaw({prompt,responseLength:192,signal:controller.signal});
-        const raw=await Promise.race([task,cancelled]);
-        return cleanGenOutput(await extractGeneratedText(raw));
+        logReq('синхронизация RP-времени',where+' · '+String(prompt).length+' симв. · max 2048');
+        const task=socialGen(prompt,{storyClock:true,signal});
+        const raw=String(await Promise.race([task,cancelled]) || '').trim();
+        if(!raw)throw new Error('Модель вернула пустой текст. Возможно, лимит ушёл на рассуждения или провайдер не вернул финальный ответ.');
+        logOk('ответ RP-времени',raw.length+' симв.');
+        return raw;
+    } catch(e) {
+        if(signal?.aborted)throw e;
+        const root=rootErrorMessage(e);
+        const outer=String(e?.message||e);
+        const detail=outer.includes(root)?outer:outer+' — '+root;
+        logFail('синхронизация RP-времени',where+' · '+detail);
+        console.warn('[GlassPhone] Story clock request failed:',where,e);
+        throw new Error(where+': '+detail,{cause:e});
     } finally {
-        clearTimeout(timer);
-        signal?.removeEventListener('abort',abort);
-        controller.signal.removeEventListener('abort',stop);
+        signal?.removeEventListener('abort',stop);
     }
 }
 
