@@ -739,7 +739,7 @@ export function refreshStoryClockStatus(){
     if(el){
         const date=dt?.day?(dt.year?dt.label+'.'+dt.year:dt.label+' (год неизвестен)'):'не найдена';
         const time=dt?.hours!==undefined?String(dt.hours).padStart(2,'0')+':'+String(dt.minutes).padStart(2,'0'):'не найдено';
-        el.textContent=state.busy?'ИИ читает RP-посты…':state.error?'Ошибка синхронизации: '+state.error:'Дата: '+date+' · Время: '+time;
+        el.textContent=state.busy?'ИИ читает RP-посты…':state.error?'Ошибка синхронизации: '+state.error:'Дата: '+date+' · Время: '+time+(dt?.source==='rp-hud'?' · HUD (без запроса)':dt?.source==='rp-hud-last'?' · Последние подтверждённые часы HUD':dt?.source==='rp-ai'?' · ИИ':'');
     }
     const btn=document.getElementById('gp-set-story-clock-refresh');if(btn)btn.disabled=state.busy;
 }

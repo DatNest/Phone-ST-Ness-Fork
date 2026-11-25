@@ -46,3 +46,7 @@ The phone reads the latest five RP posts and available external HTML metadata on
 ### Ness 2.60.0-ness.19 — clock transport fix
 
 Clock uses the existing phone generation transport, inherits the phone connection or a selected clock profile, bypasses social prefill and low output caps, and uses a 2048-token ceiling (including provider reasoning) with a single compact line response. Empty and incomplete responses get explicit errors. No automatic retries or new request triggers.
+
+### Ness 2.60.0-ness.20 — HUD clock integration
+
+Extracts the HUD scene record before truncating long messages, drops unrelated HUD data from the model context, and reads complete current HUD date/time locally without a model call. Later RP posts without complete HUD still use AI, with the last explicit HUD as evidence. Invalidates previous clock cache schema. If AI returns no clock, labels the last known HUD separately.

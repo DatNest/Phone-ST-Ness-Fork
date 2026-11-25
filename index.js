@@ -78,7 +78,7 @@ function setupSettingsPanel() {
                     <small>ИИ ищет естественный повод в прямых и косвенных событиях RP, но может решить никому не писать. Только существующие контакты с установленной связью; без звука и без инструкций в основной чат. Переключатель «Приостановить входящие» отключает инициативу.</small>
                 </div>
                 <div class="gp-settings-wide gp-story-clock-settings">
-                    <label class="gp-settings-field gp-settings-wide"><span>Дата и время ролевой</span><small>ИИ читает свежие RP-посты и их HTML-метки только при открытии телефона после изменения чата или по кнопке. Без фоновых запросов. Результат сохраняется отдельно для каждого чата.</small></label>
+                    <label class="gp-settings-field gp-settings-wide"><span>Дата и время ролевой</span><small>Телефон читает дату и время HUD напрямую, если они есть в последнем RP-посте. Иначе ИИ анализирует посты и метки при открытии после изменения чата или по кнопке. Без фоновых запросов. Кэш отдельный для каждого чата.</small></label>
                     <label class="gp-settings-field gp-settings-wide"><span>Профиль синхронизации времени</span><select id="gp-set-clock-profile" class="text_pole"></select><small>По умолчанию — профиль генерации телефона.</small></label>
                     <div class="gp-settings-control-row"><button type="button" class="menu_button" id="gp-set-story-clock-refresh"><i class="fa-solid fa-rotate" aria-hidden="true"></i> Обновить время и дату</button></div>
                     <small id="gp-story-clock-status" class="gp-settings-wide" aria-live="polite"></small>

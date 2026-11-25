@@ -33,3 +33,21 @@ test('compact model output, optional JSON, empty and incomplete answers',()=>{
  assert.throws(()=>decodeStoryClock('1997-10-23 | 24:00'));
  assert.throws(()=>decodeStoryClock('1997-02-29 | 18:00'));
 });
+
+test('long HUD post: scene data survives clipping, unrelated HUD history is excluded',()=>{
+ const hud='[HUD]\n```json\n'+JSON.stringify({sc:{T:'17:22 | ранний вечер',Dt:'среда, 03.09.2025'},me:{lg:['10:00 - старое событие']},padding:'x'.repeat(7800)})+'\n```\n[/HUD]';
+ const rows=clockPosts([{mes:'а'.repeat(2536)+hud}],s=>s,()=>false);
+ assert.equal(rows[0].hud.hours,17);assert.equal(rows[0].hud.minutes,22);
+ assert.equal(rows[0].hud.year,2025);assert.equal(rows[0].hud.month,9);assert.equal(rows[0].hud.day,3);
+ assert.match(rows[0].text,/17:22/);assert.match(rows[0].text,/03\.09\.2025/);
+ assert.doesNotMatch(rows[0].text,/старое событие/);
+});
+test('complete latest HUD needs no API, old null cache is ignored, later prose uses AI',async()=>{
+ const rows=clockPosts([{mes:'[HUD]\n```json\n{"sc":{"T":"17:22 | ранний вечер","Dt":"среда, 03.09.2025"}}\n```\n[/HUD]'}],s=>s,()=>false);
+ const owner={};let cache={keys:rows.map(r=>r.key),value:null},calls=0;
+ const c=createStoryClockSync({snapshot:()=>({owner,rows,cache}),request:async()=>{calls++;return '? | ?'},persist:(_,v)=>{cache=v},isOpen:()=>true,onStatus:()=>{}});
+ assert.equal(await c.sync(),'updated');assert.equal(cache.value.source,'rp-hud');assert.equal(calls,0);
+ assert.equal(await c.sync(),'cached');assert.equal(await c.sync({force:true}),'updated');assert.equal(calls,0);
+ rows.push({key:'later',text:'следующий пост'});
+ assert.equal(await c.sync(),'updated');assert.equal(calls,1);assert.equal(cache.value.source,'rp-hud-last');
+});
